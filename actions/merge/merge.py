@@ -153,6 +153,25 @@ def validate_request(comment, pr, config, head, base, run, permission):
     return "maintainer"
 
 
+def commit_evidence(api, number, head, requester, config):
+    commits = api.pages(f"/pulls/{number}/commits")
+    require(commits and commits[-1]["sha"] == head, "PR commit list differs from reviewed head")
+    trailers = []
+    has_renovate_author = False
+    for commit in commits:
+        author = commit["commit"]["author"]
+        require(all(isinstance(author.get(key), str) and author[key] and not any(c in author[key] for c in "\r\n<>") for key in ("name", "email")), "invalid commit author")
+        trailer = f"Signed-off-by: {author['name']} <{author['email']}>"
+        message = commit["commit"]["message"]
+        # Only copy genuine author-matching trailers from the final message paragraph.
+        require(trailer in message.rstrip().split("\n\n")[-1].splitlines(), "commit is missing its author's DCO trailer")
+        if trailer not in trailers:
+            trailers.append(trailer)
+        has_renovate_author |= is_renovate(commit.get("author") or {}, config)
+    require(requester != "renovate" or has_renovate_author, "PR has no genuine Renovate-authored commit")
+    return {"commit_message": "\n".join(trailers), "tree": sha(commits[-1]["commit"]["tree"]["sha"])}
+
+
 def snapshot(api, repository, default_branch, number, comment_id):
     repo = api.request("")
     require(repo["full_name"] == repository and repo["default_branch"] == default_branch and not repo["archived"], "repository identity or configured default branch changed")
@@ -182,7 +201,9 @@ def snapshot(api, repository, default_branch, number, comment_id):
         owner = repository.split("/")[0]
         require(any(re.fullmatch(r"github>" + re.escape(owner) + r"/automation//automerge\.json#v\d+\.\d+\.\d+", preset) for preset in renovate.get("extends", [])), "trusted default branch has not opted into checked dependency merging")
         require(renovate.get("automerge") is not False and renovate.get("platformAutomerge") is not True and renovate.get("ignoreTests") is not True, "repository dependency policy forbids this handoff")
-    return {"head": head, "base": base, "run_id": run["id"], "run_attempt": run["run_attempt"],
+    evidence = commit_evidence(api, number, head, requester, config)
+    require(re.fullmatch(r"(feat|fix|chore|docs|test|refactor|perf|build|ci|style|revert)(\([^\r\n)]*\))?!?: [^\r\n]+", pr["title"]), "PR title is not a Conventional Commit")
+    return {**evidence, "commit_title": f"{pr['title']} (#{number})", "head": head, "base": base, "run_id": run["id"], "run_attempt": run["run_attempt"],
             "request_id": comment["id"], "requester_id": comment["user"]["id"], "request_created": comment["created_at"],
             "pr_updated": pr["updated_at"], "policy": config}
 
@@ -205,9 +226,15 @@ def merge(api, repository, default_branch, number, comment_id):
     first = snapshot(api, repository, default_branch, number, comment_id)
     second = snapshot(api, repository, default_branch, number, comment_id)
     require(first == second, "head, base, policy, request or CI changed during final checks")
-    result = api.request(f"/pulls/{number}/merge", "PUT", {"sha": first["head"], "merge_method": "squash"})
+    result = api.request(f"/pulls/{number}/merge", "PUT", {"sha": first["head"], "merge_method": "squash",
+        "commit_title": first["commit_title"], "commit_message": first["commit_message"]})
     require(result.get("merged") is True, "GitHub did not merge the expected commit")
     merged = sha(result["sha"])
+    published = api.request("/git/commits/" + merged)
+    require(published["tree"]["sha"] == first["tree"], "published tree differs from tested head")
+    author = published["author"]
+    trailer = f"Signed-off-by: {author['name']} <{author['email']}>"
+    require(trailer in first["commit_message"].splitlines() and trailer in published["message"].splitlines(), "published squash author lacks a genuine source sign-off")
     # GITHUB_TOKEN merges suppress push-triggered workflows. Dispatch explicitly.
     print(f"Merged PR #{number} as {merged}; required follow-up: {first['policy']['ci_workflow']} on {default_branch} at {merged}.", flush=True)
     dispatch(api, first["policy"]["ci_workflow"], default_branch, merged)

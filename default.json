@@ -3,6 +3,7 @@
   "description": "Versioned dependency updates with explicit CI-checked merge requests.",
   "extends": [
     "config:recommended",
+    ":gitSignOff",
     ":configMigration",
     "group:allNonMajor",
     "customManagers:biomeVersions"
