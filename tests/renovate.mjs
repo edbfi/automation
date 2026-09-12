@@ -13,6 +13,7 @@ GlobalConfig.set({ localDir: process.cwd() });
 
 const read = async (name) => JSON.parse(await readFile(new URL(`../${name}.json`, import.meta.url), 'utf8'));
 const { config: base } = await resolveConfigPresets(await read('default'));
+assert.deepEqual(base.commitTrailers, ['Signed-off-by: {{{gitAuthor}}}']);
 const ready = mergeChildConfig(base, await read('automerge'));
 const runtimeManager = base.customManagers.find((m) => m.matchStrings.some((s) => s.startsWith('# renovate:')));
 const runtime = extractRegex('      # renovate: datasource=npm depName=bun\n      version: 1.4.2\n', '.github/workflows/ci.yml', runtimeManager);
@@ -55,18 +56,29 @@ async function policy(config, overrides = {}) {
 }
 assert.equal((await policy(base)).automerge, false);
 assert.equal((await policy(ready)).automerge, true);
-assert.equal((await policy(ready, { updateType: 'major' })).automerge, false);
-assert.equal((await policy(ready, { currentVersion: '0.4.0', updateType: 'minor' })).dependencyDashboardApproval, true);
-assert.equal((await policy(ready, { manager: 'custom.regex', datasource: 'github-releases', packageName: 'j178/prek', depName: 'j178/prek', currentValue: '0.4.0', currentVersion: 'v0.4.0', updateType: 'minor' })).dependencyDashboardApproval, true);
-assert.equal((await policy(ready, { packageName: 'typescript', depName: 'typescript', updateType: 'major' })).dependencyDashboardApproval, true);
+assert.equal((await policy(ready, { updateType: 'major' })).automerge, true);
+assert.equal((await policy(ready, { currentVersion: '0.4.0', updateType: 'minor' })).dependencyDashboardApproval, false);
+assert.equal((await policy(ready, { manager: 'custom.regex', datasource: 'github-releases', packageName: 'j178/prek', depName: 'j178/prek', currentValue: '0.4.0', currentVersion: 'v0.4.0', updateType: 'minor' })).dependencyDashboardApproval, false);
+assert.equal((await policy(ready, { packageName: 'typescript', depName: 'typescript', updateType: 'major' })).dependencyDashboardApproval, false);
 assert.equal((await policy(ready, { manager: 'github-actions', datasource: 'github-tags', packageName: 'actions/checkout', depName: 'actions/checkout', updateType: 'major' })).pinDigests, false);
-assert.equal((await policy(ready, { manager: 'renovate-config', packageName: 'edbfi/automation', depName: 'edbfi/automation' })).automerge, false);
+assert.equal((await policy(ready, { manager: 'renovate-config', packageName: 'edbfi/automation', depName: 'edbfi/automation' })).automerge, true);
 assert.equal((await policy(ready, { packageName: '@biomejs/biome', depName: '@biomejs/biome' })).groupName, 'biome');
 console.log('Renovate extraction and resolved-policy scenarios passed.');
 
 assert.equal(base.platformAutomerge, false);
 assert.equal(base.automergeType, 'pr-comment');
 assert.equal(base.automergeComment, '/merge-when-green');
-assert.equal((await policy(ready, { currentVersion: 'v0.4.0', updateType: 'minor' })).dependencyDashboardApproval, true);
+assert.equal((await policy(ready, { currentVersion: 'v0.4.0', updateType: 'minor' })).dependencyDashboardApproval, false);
 assert.equal((await policy(mergeChildConfig(ready, { packageRules: [{ matchPackageNames: ['example'], automerge: false }] }))).automerge, false);
-assert.equal((await policy(ready, { updateType: 'major', depName: 'some-runtime', packageName: 'some-runtime' })).automerge, false);
+assert.equal((await policy(ready, { updateType: 'major', depName: 'some-runtime', packageName: 'some-runtime' })).automerge, true);
+
+// Eligibility is uniform across update types, including the automation itself.
+for (const updateType of ['major', 'minor', 'patch', 'pin', 'digest', 'lockFileMaintenance']) {
+  for (const manager of ['bun', 'github-actions', 'renovate-config']) {
+    const result = await policy(ready, { updateType, manager, depName: 'edbfi/automation', packageName: 'edbfi/automation' });
+    assert.equal(result.automerge, true);
+    assert.equal(result.dependencyDashboardApproval, false);
+    assert.equal(result.platformAutomerge, false);
+    assert.equal(result.ignoreTests, false);
+  }
+}

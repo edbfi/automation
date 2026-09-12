@@ -14,6 +14,9 @@ helper = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(helper)
 HEAD, BASE, MERGED = 'a' * 40, 'b' * 40, 'c' * 40
 REPOSITORY = 'edbfi/automation'
+TREE = 'd' * 40
+AUTHOR = {'name': 'renovate[bot]', 'email': '29139614+renovate[bot]@users.noreply.github.com'}
+TRAILER = f"Signed-off-by: {AUTHOR['name']} <{AUTHOR['email']}>"
 EARLY, NOW, LATER = '2026-09-01T10:00:00Z', '2026-09-01T10:01:00Z', '2026-09-01T10:02:00Z'
 BOT = {'login': 'renovate[bot]', 'id': 29139614, 'type': 'Bot'}
 
@@ -24,7 +27,7 @@ class FakeAPI:
         self.config = json.loads((ROOT / '.github/merge-policy.json').read_text())
         self.base = BASE
         self.repo = {'id': 10, 'full_name': REPOSITORY, 'default_branch': 'main', 'archived': False, 'allow_auto_merge': False}
-        self.pr = {'state': 'open', 'draft': False, 'merged': False, 'mergeable': True, 'number': 1,
+        self.pr = {'state': 'open', 'draft': False, 'merged': False, 'mergeable': True, 'number': 1, 'title': 'chore(deps): update example',
                    'base': {'ref': 'main', 'sha': BASE, 'repo': {'full_name': REPOSITORY}},
                    'head': {'ref': 'renovate/example', 'sha': HEAD, 'repo': {'full_name': REPOSITORY}},
                    'user': BOT, 'updated_at': NOW, 'requested_reviewers': [], 'requested_teams': [], 'labels': []}
@@ -38,6 +41,8 @@ class FakeAPI:
         self.jobs, self.checks = [], []
         for index, name in enumerate(self.config['required_checks']):
             self.add_job(name, index + 50)
+        self.commits = [{'sha': HEAD, 'author': BOT, 'commit': {'author': AUTHOR, 'message': 'chore(deps): update example\n\n' + TRAILER, 'tree': {'sha': TREE}}}]
+        self.published = {'author': AUTHOR, 'message': 'chore(deps): update example (#1)\n\n' + TRAILER, 'tree': {'sha': TREE}}
         self.reviews = []
         self.permission = 'admin'
         self.writes = []
@@ -72,6 +77,8 @@ class FakeAPI:
             return {'encoding': 'base64', 'content': base64.b64encode(json.dumps(value).encode()).decode()}
         if path == '/pulls/1':
             return deepcopy(self.pr)
+        if path == '/git/commits/' + MERGED:
+            return deepcopy(self.published)
         if path.startswith('/compare/'):
             return {'ahead_by': 1, 'behind_by': 0, 'merge_base_commit': {'sha': self.base}}
         if path == '/actions/workflows/ci.yml':
@@ -83,6 +90,8 @@ class FakeAPI:
         raise AssertionError('unexpected test API read: ' + path)
 
     def pages(self, path, field=None):
+        if path == '/pulls/1/commits':
+            return deepcopy(self.commits)
         if path.endswith('/reviews'):
             return deepcopy(self.reviews)
         if path.startswith('/actions/workflows/'):
@@ -120,8 +129,36 @@ class MergeTests(unittest.TestCase):
     def test_success_merges_expected_sha_and_dispatches_exact_default_commit(self):
         api = FakeAPI()
         helper.merge(api, REPOSITORY, 'main', 1, 7)
-        self.assertEqual(api.writes, [('/pulls/1/merge', 'PUT', {'sha': HEAD, 'merge_method': 'squash'}),
+        self.assertEqual(api.writes, [('/pulls/1/merge', 'PUT', {'sha': HEAD, 'merge_method': 'squash',
+            'commit_title': 'chore(deps): update example (#1)', 'commit_message': TRAILER}),
             ('/actions/workflows/ci.yml/dispatches', 'POST', {'ref': 'main', 'inputs': {'expected-default-sha': MERGED}})])
+
+    def test_unsigned_mismatched_or_non_trailer_signoffs_block(self):
+        for message in ['chore(deps): update example', 'chore(deps): update example\n\nSigned-off-by: someone <other@example.com>', TRAILER + '\n\nchore(deps): update example']:
+            self.reject(lambda a: a.commits[0]['commit'].update(message=message))
+        self.reject(lambda a: a.commits[0].update(author={'login': 'other', 'id': 1, 'type': 'User'}))
+        self.reject(lambda a: a.commits[0].update(sha=BASE))
+        self.reject(lambda a: a.pr.update(title='not conventional'))
+
+    def test_repair_signoff_is_preserved_without_fabricating_bot_authorship(self):
+        api = FakeAPI()
+        repair_author = {'name': 'github-actions[bot]', 'email': '41898282+github-actions[bot]@users.noreply.github.com'}
+        repair_trailer = f"Signed-off-by: {repair_author['name']} <{repair_author['email']}>"
+        api.commits[0]['sha'] = 'e' * 40
+        api.commits.append({'sha': HEAD, 'author': {'login': 'github-actions[bot]', 'id': 41898282, 'type': 'Bot'},
+            'commit': {'author': repair_author, 'message': 'chore(deps): migrate Biome\n\n' + repair_trailer, 'tree': {'sha': TREE}}})
+        api.published['message'] += '\n' + repair_trailer
+        helper.merge(api, REPOSITORY, 'main', 1, 7)
+        self.assertEqual(api.writes[0][2]['commit_message'], TRAILER + '\n' + repair_trailer)
+
+    def test_published_tree_and_author_are_verified(self):
+        for mutate in [lambda a: a.published.update(tree={'sha': BASE}),
+                       lambda a: a.published.update(author={'name': 'other', 'email': 'other@example.com'})]:
+            api = FakeAPI()
+            mutate(api)
+            with self.assertRaises(helper.Blocked):
+                helper.merge(api, REPOSITORY, 'main', 1, 7)
+            self.assertEqual(len(api.writes), 1)
 
     def reject(self, mutate):
         api = FakeAPI()

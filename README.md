@@ -23,26 +23,34 @@ Start with the versioned base preset:
 
 ```json
 {
-  "extends": ["github>edbfi/automation//default.json#v1.0.0"]
+  "extends": ["github>edbfi/automation//default.json#v1.1.0"]
 }
 ```
 
 After the checked merge workflow and its policy are validated, append
-`github>edbfi/automation//automerge.json#v1.0.0`. Mixed projects can append
-`github>edbfi/automation//mixed.json#v1.0.0`. Preserve repository-specific
-compatibility constraints and manual dependency policies.
+`github>edbfi/automation//automerge.json#v1.1.0`. Mixed projects can append
+`github>edbfi/automation//mixed.json#v1.0.0`.
+
+The v1.1.0 base preset signs future Renovate commits with the actual bot author.
+The base alone keeps merging disabled. The optional v1.1.0 automerge preset makes
+all dependency update types eligible, including majors, pre-1.0 updates and
+shared automation presets/actions/workflows, without Dependency Dashboard
+approval. The dashboard remains useful for visibility. Consumers must remove
+obsolete local version caps, dashboard gates and automatic-merge exclusions when
+adopting this policy; later explicit repository rules still take precedence.
 
 The base groups non-major updates while keeping Actions, TypeScript, Biome and
-prek groups separate. Both `0.x` and `v0.x` minor updates require Dependency
-Dashboard approval. Majors remain manual except the explicit tooling allowlist,
-which also requires dashboard approval. Shared policy updates remain manual.
+prek groups separate. Preserve deliberate ownership boundaries where a separate
+updater owns a dependency; do not run competing update pipelines. Docker/Hotio
+consumers are outside this rollout and keep their existing pinned policies.
 
 Renovate uses `platformAutomerge: false`, `automergeType: pr-comment` and the
 `/merge-when-green` handoff. Its authenticated request attests that the current
-update satisfies Renovate's configured eligibility and dashboard-approval rules.
-The merge helper independently checks repository opt-in, request freshness,
-reviews, current branch state and complete CI. `manual-dependencies` and
-`do-not-merge` labels block dependency handoffs. Never enable `ignoreTests`.
+update satisfies Renovate's configured eligibility rules. The checked merge
+helper independently verifies opt-in, request freshness, reviews, current branch
+state and complete CI. Configure `minimum_approvals: 0` for unattended operation.
+Explicit review objections and `manual-dependencies`/`do-not-merge` labels remain
+ways to stop a particular PR. Never enable `ignoreTests`.
 
 ## Checked merging
 
@@ -56,7 +64,7 @@ including `ci / required`. Declare optional reporting in `optional_checks`.
 Unexpected contexts and duplicate names block merging. Use this repository's
 policy as a schema example, replacing the job names with the caller's actual CI.
 
-Call `edbfi/automation/actions/merge@v1.0.0` from trusted default-branch
+Call `edbfi/automation/actions/merge@v1.1.0` from trusted default-branch
 workflows for `issue_comment: created`, `pull_request_target: synchronize,
 reopened, edited, ready_for_review`, and completion of the `ci` workflow.
 Grant contents, pull requests, issues and Actions write, plus checks read.
@@ -76,6 +84,11 @@ changes or current CI, outstanding review requests, requested changes and missin
 current-head approvals block merging. The head must contain the latest default
 branch. CI must be the newest full run for that exact head, from the configured
 workflow and GitHub Actions app, with matching run attempts and check-suite IDs.
+
+Every PR commit must have its own author-matching DCO trailer. Squash messages
+copy only those existing trailers; old unsigned bot commits are rejected instead
+of receiving fabricated sign-offs. The helper verifies the published tree and
+that the squash author has a genuine source sign-off before dispatching final CI.
 
 The helper reads policy from the current default-branch commit and repeats its
 evidence collection immediately before merging with the expected head SHA.
@@ -123,6 +136,10 @@ RE2; it does not silently accept a JavaScript-regex fallback. Tests exercise
 actual Renovate extraction and resolved policy, both pre-1.0 forms, manual
 overrides, strict aggregation, real Biome migration, dispatch identity and merge
 request/CI races.
+
+Shared-policy updates are eligible for automated consumer adoption only after
+the shared implementation has passed its own tests and a release is published.
+Each consumer still runs its full required CI on the updated version.
 
 Publish immutable full-version releases only after the implementation PR and
 merged revision pass CI. Never move release tags. Callers reference versioned
