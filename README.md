@@ -118,6 +118,11 @@ explicit full-CI dispatch. Callers must accept `pr-number` and
 `expected-head-sha` and pass them to the dispatch guard in validation and the
 aggregate. Repair does not replace CI or update approvals.
 
+The v1.1.1 repair workflow treats schema-only Renovate updates as a no-op: it
+executes no package installation or formatter and publishes no repair commit.
+Normal CI still checks the PR. Actual dependency updates retain migration,
+allowlisted formatting, idempotence checks and full CI after repair.
+
 ## Maintenance and releases
 
 Use focused Conventional Commits with DCO sign-offs and a complete implementation
