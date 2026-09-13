@@ -42,6 +42,7 @@ jobs:
         with:
           toolchain: ${{ inputs.version }}
           components: rustfmt, clippy
+          rustflags: -D warnings
           cache-workspaces: ${{ inputs.working-directory }}
       - name: Run required check
         env:
