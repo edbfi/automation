@@ -31,6 +31,7 @@ class FakeAPI:
                    'base': {'ref': 'main', 'sha': BASE, 'repo': {'full_name': REPOSITORY}},
                    'head': {'ref': 'renovate/example', 'sha': HEAD, 'repo': {'full_name': REPOSITORY}},
                    'user': BOT, 'updated_at': NOW, 'requested_reviewers': [], 'requested_teams': [], 'labels': []}
+        self.comments_present = True
         self.comment = {'id': 7, 'user': BOT, 'body': '/merge-when-green', 'created_at': NOW,
                         'updated_at': NOW, 'issue_url': self.root + '/issues/1'}
         self.renovate = {'extends': ['github>edbfi/automation//automerge.json#v1.0.0']}
@@ -101,7 +102,9 @@ class FakeAPI:
         if path.startswith('/check-suites/'):
             return deepcopy(self.checks)
         if path == '/issues/1/comments':
-            return [deepcopy(self.comment)]
+            return [deepcopy(self.comment)] if self.comments_present else []
+        if path == '/pulls?state=open&head=edbfi%3Arenovate%2Fexample':
+            return [deepcopy(self.pr)]
         raise AssertionError('unexpected pagination: ' + path)
 
 
@@ -190,8 +193,7 @@ class MergeTests(unittest.TestCase):
 
     def test_wrong_and_stale_requests_block(self):
         mutations = [lambda a: a.comment.update(user={**BOT, 'id': 1}),
-                     lambda a: a.comment.update(updated_at=LATER), lambda a: a.comment.update(created_at=EARLY, updated_at=EARLY),
-                     lambda a: a.pr.update(updated_at=LATER), lambda a: a.runs[0].update(updated_at=LATER),
+                     lambda a: a.comment.update(updated_at=LATER),
                      lambda a: a.comment.update(body='/merge-anything'), lambda a: a.comment.update(issue_url=a.root + '/issues/2'),
                      lambda a: a.pr.update(labels=[{'name': 'manual-dependencies'}]),
                      lambda a: a.pr.update(user={'login': 'person', 'id': 2, 'type': 'User'}),
@@ -249,11 +251,45 @@ class MergeTests(unittest.TestCase):
         api.add_job('report', 99, 'skipped')
         helper.merge(api, REPOSITORY, 'main', 1, 7)
 
-    def test_stale_bot_handoff_is_removed_for_renovate_to_reissue(self):
+    def test_bot_handoff_survives_pr_edits_and_later_current_head_ci(self):
         api = FakeAPI()
         api.pr['updated_at'] = LATER
-        helper.invalidate(api, 'main', 1)
-        self.assertEqual(api.writes, [('/issues/comments/7', 'DELETE', None)])
+        api.runs[0]['updated_at'] = LATER
+        helper.resume(api, REPOSITORY, 'main', 1)
+        self.assertEqual(api.writes[0][0:2], ('/pulls/1/merge', 'PUT'))
+        self.assertFalse(any(method == 'DELETE' for _, method, _ in api.writes))
+
+    def test_successful_pr_ci_resumes_genuine_handoff(self):
+        api = FakeAPI()
+        api.runs[0]['updated_at'] = LATER
+        helper.complete(api, 'main', deepcopy(api.runs[0]))
+        self.assertEqual(api.writes[0][0:2], ('/pulls/1/merge', 'PUT'))
+
+    def test_ci_completion_does_not_create_missing_requests_or_use_stale_events(self):
+        for change in ['missing', 'wrong_head', 'older_run', 'failed', 'edited', 'manual_label']:
+            with self.subTest(change=change):
+                api = FakeAPI()
+                event = deepcopy(api.runs[0])
+                if change == 'missing': api.comments_present = False
+                if change == 'wrong_head': event['head_sha'] = BASE
+                if change == 'older_run': event['id'] = 19
+                if change == 'failed': event['conclusion'] = 'failure'
+                if change == 'edited': api.comment['updated_at'] = LATER
+                if change == 'manual_label': api.pr['labels'] = [{'name': 'do-not-merge'}]
+                if change in {'older_run', 'edited', 'manual_label'}:
+                    with self.assertRaises(helper.Blocked): helper.complete(api, 'main', event)
+                else:
+                    helper.complete(api, 'main', event)
+                self.assertEqual(api.writes, [])
+
+    def test_manual_request_still_requires_current_pr_and_ci_timestamps(self):
+        for field in ['pr', 'ci']:
+            api = FakeAPI()
+            api.comment.update(user={'id': 80, 'login': 'maintainer', 'type': 'User'}, body=f'/merge {HEAD} {BASE}')
+            if field == 'pr': api.pr['updated_at'] = LATER
+            else: api.runs[0]['updated_at'] = LATER
+            with self.assertRaises(helper.Blocked): helper.merge(api, REPOSITORY, 'main', 1, 7)
+            self.assertEqual(api.writes, [])
 
     def test_default_ci_dispatch_failure_is_reported_after_merge(self):
         api = FakeAPI()

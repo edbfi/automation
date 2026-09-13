@@ -1,4 +1,4 @@
-"""Merge only after a fresh request, trusted policy and complete exact-head CI."""
+"""Merge only after a genuine request, trusted policy and complete exact-head CI."""
 import base64
 from datetime import datetime
 import json
@@ -140,14 +140,14 @@ def ci_evidence(api, config, head, branch, number=None):
 
 def validate_request(comment, pr, config, head, base, run, permission):
     require(comment["created_at"] == comment["updated_at"], "edited merge requests are not accepted")
-    require(timestamp(comment["created_at"]) >= timestamp(pr["updated_at"]), "merge request predates PR changes")
-    require(timestamp(comment["created_at"]) >= timestamp(run["updated_at"]), "merge request predates current CI evidence")
     if is_renovate(comment["user"], config):
         require(is_renovate(pr["user"], config), "Renovate request is not on a Renovate PR")
         require(comment["body"] == config["renovate_comment"], "unexpected Renovate handoff")
         require(pr["head"]["ref"].startswith("renovate/"), "unexpected Renovate branch")
         require(not {"manual-dependencies", "do-not-merge"} & {label["name"] for label in pr.get("labels", [])}, "manual dependency policy applies")
         return "renovate"
+    require(timestamp(comment["created_at"]) >= timestamp(pr["updated_at"]), "merge request predates PR changes")
+    require(timestamp(comment["created_at"]) >= timestamp(run["updated_at"]), "merge request predates current CI evidence")
     require(permission in {"admin", "maintain", "write"}, "requester lacks merge permission")
     require(comment["body"] == f"/merge {head} {base}", "manual request must name the exact head and base commits")
     return "maintainer"
@@ -241,21 +241,37 @@ def merge(api, repository, default_branch, number, comment_id):
     print(f"Merged PR #{number}; dispatched default-branch CI for {merged}.")
 
 
-def invalidate(api, default_branch, number):
+def resume(api, repository, default_branch, number, event_run=None):
     base = api.request("/git/ref/heads/" + urllib.parse.quote(default_branch, safe=""))["object"]["sha"]
     config = policy(api, base)
     pr = api.request(f"/pulls/{number}")
-    if not is_renovate(pr["user"], config):
+    if pr["state"] != "open" or not is_renovate(pr["user"], config):
         return
-    for comment in api.pages(f"/issues/{number}/comments"):
-        if is_renovate(comment["user"], config) and comment["body"] == config["renovate_comment"] and timestamp(comment["created_at"]) < timestamp(pr["updated_at"]):
-            api.request(f"/issues/comments/{comment['id']}", "DELETE")
-    # Renovate's next eligible run can issue a fresh supported pr-comment handoff.
+    if event_run is not None:
+        if event_run["head_sha"] != pr["head"]["sha"] or event_run["head_branch"] != pr["head"]["ref"]:
+            return
+        run = ci_evidence(api, config, pr["head"]["sha"], pr["head"]["ref"], number)
+        require(run["id"] == event_run["id"] and run["run_attempt"] == event_run["run_attempt"], "stale PR CI event")
+    # Renovate caches comments across scans. Keep its genuine request and recheck
+    # all live policy, authorship, head/base and CI evidence before acting on it.
+    comments = [comment for comment in api.pages(f"/issues/{number}/comments")
+                if is_renovate(comment["user"], config) and comment["body"] == config["renovate_comment"]]
+    if comments:
+        comment = max(comments, key=lambda item: (timestamp(item["created_at"]), item["id"]))
+        merge(api, repository, default_branch, number, comment["id"])
 
 
 def complete(api, default_branch, event_run):
+    repository = api.root.removeprefix("https://api.github.com/repos/")
     base = api.request("/git/ref/heads/" + urllib.parse.quote(default_branch, safe=""))["object"]["sha"]
-    if event_run["head_sha"] != base or event_run["head_branch"] != default_branch:
+    if event_run["head_branch"] != default_branch:
+        if event_run["status"] != "completed" or event_run["conclusion"] != "success":
+            return
+        branch = urllib.parse.quote(repository.split("/")[0] + ":" + event_run["head_branch"], safe="")
+        for pr in api.pages(f"/pulls?state=open&head={branch}"):
+            resume(api, repository, default_branch, pr["number"], event_run)
+        return
+    if event_run["head_sha"] != base:
         return
     config = policy(api, base)
     run = ci_evidence(api, config, base, default_branch)
@@ -283,7 +299,7 @@ def main():
             require(event["sender"]["id"] == event["comment"]["user"]["id"], "request event actor mismatch")
             merge(api, repository, default_branch, event["issue"]["number"], event["comment"]["id"])
     elif name == "pull_request_target":
-        invalidate(api, default_branch, event["pull_request"]["number"])
+        resume(api, repository, default_branch, event["pull_request"]["number"])
     elif name == "workflow_run" and event["action"] == "completed":
         complete(api, default_branch, event["workflow_run"])
 
