@@ -120,8 +120,14 @@ def compute(configs, roots, package_directory, api, pr_number, head, output):
     package = Path(package_directory) / 'package.json'
     manifest = json.loads(package.read_text())
     deps = {**manifest.get('dependencies', {}), **manifest.get('devDependencies', {})}
-    if '@biomejs/biome' not in deps or not any(Path(p).name in {'package.json', 'bun.lock', 'bun.lockb'} for p in changed):
+    if '@biomejs/biome' not in deps:
         raise ValueError('no installed Biome update surface found')
+    if not any(Path(p).name in {'package.json', 'bun.lock', 'bun.lockb'} for p in changed):
+        # Renovate also updates schema URLs independently. Normal CI checks those PRs;
+        # there is no dependency update to migrate and no formatter should run.
+        with Path(os.environ['GITHUB_OUTPUT']).open('a') as stream:
+            stream.write('changed=false\n')
+        return
     # Neither dependency installation nor the formatter receives the API token.
     tool_env = {key: value for key, value in os.environ.items() if key in {'PATH', 'HOME', 'TMPDIR', 'LANG', 'SYSTEMROOT'}}
     subprocess.run(['bun', 'install', '--frozen-lockfile', '--ignore-scripts'], cwd=package_directory, env=tool_env, check=True)

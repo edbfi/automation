@@ -79,6 +79,27 @@ class RepairTests(unittest.TestCase):
             self.assertEqual(repair.publish(PAYLOAD, ['biome.json'], ['src'], api, REPO, 'ci.yml', 7, HEAD), NEW)
         self.assertEqual(count, 3)
 
+    def test_schema_only_update_does_not_run_tools_or_publish_a_repair(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'package.json').write_text(json.dumps({'devDependencies': {'@biomejs/biome': '^2.4.11'}}))
+            config = '{"$schema":"https://biomejs.dev/schemas/2.5.12/schema.json"}\n'
+            (root / 'biome.json').write_text(config)
+            class API:
+                def call(self, path):
+                    if path == '/pulls/7':
+                        return copy.deepcopy(PR)
+                    if path == '/pulls/7/files?per_page=100&page=1':
+                        return [{'filename': 'biome.json'}]
+                    raise AssertionError(path)
+            with patch.dict(os.environ, {'GITHUB_REPOSITORY': REPO, 'GITHUB_OUTPUT': str(root / 'outputs')}), \
+                    patch.object(repair.subprocess, 'run') as run:
+                repair.compute(['biome.json'], ['src'], str(root), API(), 7, HEAD, root / 'repair.json')
+            run.assert_not_called()
+            self.assertEqual((root / 'outputs').read_text(), 'changed=false\n')
+            self.assertFalse((root / 'repair.json').exists())
+            self.assertEqual((root / 'biome.json').read_text(), config)
+
     def test_real_biome_migrates_and_formats_idempotently(self):
         version = json.loads((Path(__file__).parents[1] / 'package.json').read_text())['devDependencies']['@biomejs/biome']
         with tempfile.TemporaryDirectory() as directory:
