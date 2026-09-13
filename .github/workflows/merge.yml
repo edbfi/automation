@@ -22,6 +22,7 @@ jobs:
       issues: write
       actions: write
       checks: read
+      statuses: read
     steps:
       - uses: actions/checkout@v7.0.1
         with:
