@@ -9,6 +9,16 @@ import { extractPackageFile as extractPreset } from '../node_modules/renovate/di
 import { extractPackageFile as extractActions } from '../node_modules/renovate/dist/modules/manager/github-actions/extract.js';
 import { GlobalConfig } from '../node_modules/renovate/dist/config/global.js';
 
+import { ensureComment } from '../node_modules/renovate/dist/modules/platform/comment.js';
+import { getCache, resetCache } from '../node_modules/renovate/dist/util/cache/repository/index.js';
+import { hash } from '../node_modules/renovate/dist/util/hash.js';
+
+// A cached bot handoff does not check GitHub again, even if another actor deleted it.
+// No platform is initialized: an unexpected remote lookup fails this regression.
+getCache().prComments = { 120: { '': hash('/merge-when-green') } };
+assert.equal(await ensureComment({ number: 120, topic: null, content: '/merge-when-green' }), true);
+resetCache();
+
 GlobalConfig.set({ localDir: process.cwd() });
 
 const read = async (name) => JSON.parse(await readFile(new URL(`../${name}.json`, import.meta.url), 'utf8'));

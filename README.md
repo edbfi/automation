@@ -45,9 +45,9 @@ updater owns a dependency; do not run competing update pipelines. Docker/Hotio
 consumers are outside this rollout and keep their existing pinned policies.
 
 Renovate uses `platformAutomerge: false`, `automergeType: pr-comment` and the
-`/merge-when-green` handoff. Its authenticated request attests that the current
-update satisfies Renovate's configured eligibility rules. The checked merge
-helper independently verifies opt-in, request freshness, reviews, current branch
+`/merge-when-green` handoff. Its authenticated request opts that bot PR into
+checked automatic merging after Renovate's eligibility evaluation. The checked merge
+helper independently verifies opt-in, request authenticity, reviews, current branch
 state and complete CI. Configure `minimum_approvals: 0` for unattended operation.
 Explicit review objections and `manual-dependencies`/`do-not-merge` labels remain
 ways to stop a particular PR. Never enable `ignoreTests`.
@@ -64,7 +64,7 @@ including `ci / required`. Declare optional reporting in `optional_checks`.
 Unexpected contexts and duplicate names block merging. Use this repository's
 policy as a schema example, replacing the job names with the caller's actual CI.
 
-Call `edbfi/automation/actions/merge@v1.1.0` from trusted default-branch
+Call `edbfi/automation/actions/merge@v1.1.2` from trusted default-branch
 workflows for `issue_comment: created`, `pull_request_target: synchronize,
 reopened, edited, ready_for_review`, and completion of the `ci` workflow.
 Grant contents, pull requests, issues and Actions write, plus checks read.
@@ -93,8 +93,13 @@ that the squash author has a genuine source sign-off before dispatching final CI
 The helper reads policy from the current default-branch commit and repeats its
 evidence collection immediately before merging with the expected head SHA.
 GitHub's merge endpoint does not atomically lock the base SHA; an independent
-writer can still race the final check. Stale Renovate handoffs are removed after
-PR changes so a later eligible Renovate run can issue a fresh request.
+writer can still race the final check. A genuine, unedited Renovate comment is a
+standing request for that bot PR. Preserve it: Renovate caches posted comments
+and may not recreate a comment deleted by another actor. PR changes and successful
+PR CI completion re-evaluate the request against the latest head/base, author DCO,
+repository opt-in, review decisions and complete CI. Missing or edited comments
+never authorize a merge. Maintainer requests retain the exact-SHA and freshness
+requirements above.
 
 After merging, the helper explicitly dispatches full default-branch CI because
 `GITHUB_TOKEN` merges suppress ordinary push-triggered workflows. CI must accept
