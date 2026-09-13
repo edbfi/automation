@@ -172,6 +172,30 @@ def commit_evidence(api, number, head, requester, config):
     return {"commit_message": "\n".join(trailers), "tree": sha(commits[-1]["commit"]["tree"]["sha"])}
 
 
+def dependency_checks(api, config, head):
+    workflow = api.request("/actions/workflows/merge.yml")
+    require(workflow["path"] == ".github/workflows/merge.yml" and workflow["state"] == "active", "unexpected or inactive merge workflow")
+    runs = api.pages(f"/actions/workflows/{workflow['id']}/runs?head_sha={head}", "workflow_runs")
+    helper_suites = {run["check_suite_id"] for run in runs
+                     if run["workflow_id"] == workflow["id"] and run["head_sha"] == head}
+    checks = api.pages(f"/commits/{head}/check-runs?filter=latest", "check_runs")
+    evidence = []
+    for check in checks:
+        require(check["head_sha"] == head, "dependency check belongs to another head")
+        # Exclude only this trusted helper's own suites: a previous blocked merge
+        # must not prevent recovery. CI, Biome repair and all other checks remain.
+        if check["app"]["id"] == config["check_app_id"] and check["check_suite"]["id"] in helper_suites:
+            continue
+        require(check["status"] == "completed" and check["conclusion"] in {"success", "skipped"}, "additional dependency check did not succeed")
+        evidence.append((check["id"], check["name"], check["conclusion"]))
+    status = api.request(f"/commits/{head}/status")
+    require(status["sha"] == head, "dependency status belongs to another head")
+    require(not status["statuses"] or status["state"] == "success", "dependency commit status did not succeed")
+    statuses = [(item["id"], item["context"], item["state"]) for item in status["statuses"]]
+    require(all(item[2] == "success" for item in statuses), "dependency commit status did not succeed")
+    return {"checks": sorted(evidence), "statuses": sorted(statuses)}
+
+
 def snapshot(api, repository, default_branch, number, comment_id):
     repo = api.request("")
     require(repo["full_name"] == repository and repo["default_branch"] == default_branch and not repo["archived"], "repository identity or configured default branch changed")
@@ -195,7 +219,9 @@ def snapshot(api, repository, default_branch, number, comment_id):
     if not is_renovate(comment["user"], config):
         permission = api.request("/collaborators/" + urllib.parse.quote(comment["user"]["login"], safe="") + "/permission")["permission"]
     requester = validate_request(comment, pr, config, head, base, run, permission)
+    extra_checks = None
     if requester == "renovate":
+        extra_checks = dependency_checks(api, config, head)
         raw = api.request("/contents/renovate.json?ref=" + base)
         renovate = json.loads(base64.b64decode(raw["content"]))
         owner = repository.split("/")[0]
@@ -205,7 +231,7 @@ def snapshot(api, repository, default_branch, number, comment_id):
     require(re.fullmatch(r"(feat|fix|chore|docs|test|refactor|perf|build|ci|style|revert)(\([^\r\n)]*\))?!?: [^\r\n]+", pr["title"]), "PR title is not a Conventional Commit")
     return {**evidence, "commit_title": f"{pr['title']} (#{number})", "head": head, "base": base, "run_id": run["id"], "run_attempt": run["run_attempt"],
             "request_id": comment["id"], "requester_id": comment["user"]["id"], "request_created": comment["created_at"],
-            "pr_updated": pr["updated_at"], "policy": config}
+            "pr_updated": pr["updated_at"], "policy": config, "dependency_checks": extra_checks}
 
 
 def dispatch(api, workflow, branch, expected):

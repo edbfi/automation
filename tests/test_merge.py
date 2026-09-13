@@ -40,6 +40,9 @@ class FakeAPI:
                       'conclusion': 'success', 'run_attempt': 1, 'check_suite_id': 40,
                       'created_at': EARLY, 'run_started_at': EARLY, 'updated_at': EARLY}]
         self.jobs, self.checks = [], []
+        self.extra_checks = []
+        self.helper_runs = []
+        self.status = {'sha': HEAD, 'state': 'pending', 'statuses': []}
         for index, name in enumerate(self.config['required_checks']):
             self.add_job(name, index + 50)
         self.commits = [{'sha': HEAD, 'author': BOT, 'commit': {'author': AUTHOR, 'message': 'chore(deps): update example\n\n' + TRAILER, 'tree': {'sha': TREE}}}]
@@ -82,6 +85,10 @@ class FakeAPI:
             return deepcopy(self.published)
         if path.startswith('/compare/'):
             return {'ahead_by': 1, 'behind_by': 0, 'merge_base_commit': {'sha': self.base}}
+        if path == '/actions/workflows/merge.yml':
+            return {'id': 31, 'path': '.github/workflows/merge.yml', 'state': 'active'}
+        if path == '/commits/' + HEAD + '/status':
+            return deepcopy(self.status)
         if path == '/actions/workflows/ci.yml':
             return {'id': 30, 'path': '.github/workflows/ci.yml', 'state': 'active'}
         if path == '/issues/comments/7':
@@ -95,6 +102,10 @@ class FakeAPI:
             return deepcopy(self.commits)
         if path.endswith('/reviews'):
             return deepcopy(self.reviews)
+        if path.startswith('/actions/workflows/31/runs'):
+            return deepcopy(self.helper_runs)
+        if path == '/commits/' + HEAD + '/check-runs?filter=latest':
+            return deepcopy(self.checks + self.extra_checks)
         if path.startswith('/actions/workflows/'):
             return deepcopy(self.runs)
         if path.endswith('/jobs'):
@@ -250,6 +261,43 @@ class MergeTests(unittest.TestCase):
         api.config['optional_checks'] = ['report']
         api.add_job('report', 99, 'skipped')
         helper.merge(api, REPOSITORY, 'main', 1, 7)
+
+    def test_retained_request_still_blocks_failed_or_pending_repair(self):
+        for conclusion in ['failure', 'cancelled', None]:
+            api = FakeAPI()
+            api.extra_checks = [{'id': 90, 'name': 'repair / compute', 'head_sha': HEAD,
+                                 'status': 'completed' if conclusion else 'queued',
+                                 'conclusion': conclusion, 'app': {'id': 15368},
+                                 'check_suite': {'id': 91}}]
+            with self.assertRaisesRegex(helper.Blocked, 'additional dependency check'):
+                helper.resume(api, REPOSITORY, 'main', 1)
+            self.assertEqual(api.writes, [])
+
+    def test_release_age_and_other_commit_statuses_must_succeed(self):
+        for state in ['pending', 'failure', 'error']:
+            self.reject(lambda a: a.status.update(state=state, statuses=[{'id': 90, 'context': 'renovate/stability-days', 'state': state}]))
+        api = FakeAPI()
+        api.status.update(state='success', statuses=[{'id': 90, 'context': 'renovate/stability-days', 'state': 'success'}])
+        helper.merge(api, REPOSITORY, 'main', 1, 7)
+        self.assertEqual(api.writes[0][0:2], ('/pulls/1/merge', 'PUT'))
+
+    def test_only_verified_helper_suites_are_excluded(self):
+        api = FakeAPI()
+        api.extra_checks = [{'id': 90, 'name': 'merge', 'head_sha': HEAD, 'status': 'completed',
+                             'conclusion': 'failure', 'app': {'id': 15368}, 'check_suite': {'id': 91}}]
+        with self.assertRaises(helper.Blocked): helper.merge(api, REPOSITORY, 'main', 1, 7)
+        self.assertEqual(api.writes, [])
+        api.helper_runs = [{'id': 92, 'workflow_id': 31, 'head_sha': HEAD, 'check_suite_id': 91}]
+        helper.merge(api, REPOSITORY, 'main', 1, 7)
+        self.assertEqual(api.writes[0][0:2], ('/pulls/1/merge', 'PUT'))
+
+    def test_additional_check_race_is_revalidated(self):
+        def install(api):
+            def mutate(client):
+                if client.snapshot_reads == 2:
+                    client.status.update(state='pending', statuses=[{'id': 90, 'context': 'renovate/stability-days', 'state': 'pending'}])
+            api.before_read = mutate
+        self.reject(install)
 
     def test_bot_handoff_survives_pr_edits_and_later_current_head_ci(self):
         api = FakeAPI()

@@ -97,7 +97,11 @@ writer can still race the final check. A genuine, unedited Renovate comment is a
 standing request for that bot PR. Preserve it: Renovate caches posted comments
 and may not recreate a comment deleted by another actor. PR changes and successful
 PR CI completion re-evaluate the request against the latest head/base, author DCO,
-repository opt-in, review decisions and complete CI. Missing or edited comments
+repository opt-in, review decisions and complete CI. Current-head check runs
+(including Biome repair) and commit statuses (including release age) must also
+succeed; only verified suites from the trusted `merge.yml` helper are excluded
+to avoid its own earlier blocked run preventing recovery. Consumer merge workflows
+need `statuses: read` alongside `checks: read` for this verification. Missing or edited comments
 never authorize a merge. Maintainer requests retain the exact-SHA and freshness
 requirements above.
 
