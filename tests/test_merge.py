@@ -18,6 +18,7 @@ TREE = 'd' * 40
 AUTHOR = {'name': 'renovate[bot]', 'email': '29139614+renovate[bot]@users.noreply.github.com'}
 TRAILER = f"Signed-off-by: {AUTHOR['name']} <{AUTHOR['email']}>"
 EARLY, NOW, LATER = '2026-09-01T10:00:00Z', '2026-09-01T10:01:00Z', '2026-09-01T10:02:00Z'
+SOON = '2026-09-01T10:01:01Z'
 BOT = {'login': 'renovate[bot]', 'id': 29139614, 'type': 'Bot'}
 
 
@@ -338,6 +339,20 @@ class MergeTests(unittest.TestCase):
             else: api.runs[0]['updated_at'] = LATER
             with self.assertRaises(helper.Blocked): helper.merge(api, REPOSITORY, 'main', 1, 7)
             self.assertEqual(api.writes, [])
+
+    def test_manual_request_tolerates_its_own_pr_timestamp_bump(self):
+        api = FakeAPI()
+        api.comment.update(user={'id': 80, 'login': 'maintainer', 'type': 'User'}, body=f'/merge {HEAD} {BASE}')
+        api.pr['updated_at'] = SOON
+        helper.merge(api, REPOSITORY, 'main', 1, 7)
+        self.assertEqual(api.writes[0][0:2], ('/pulls/1/merge', 'PUT'))
+
+    def test_manual_request_skew_does_not_relax_ci_evidence(self):
+        api = FakeAPI()
+        api.comment.update(user={'id': 80, 'login': 'maintainer', 'type': 'User'}, body=f'/merge {HEAD} {BASE}')
+        api.runs[0]['updated_at'] = SOON
+        with self.assertRaises(helper.Blocked): helper.merge(api, REPOSITORY, 'main', 1, 7)
+        self.assertEqual(api.writes, [])
 
     def test_default_ci_dispatch_failure_is_reported_after_merge(self):
         api = FakeAPI()
