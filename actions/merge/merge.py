@@ -1,6 +1,6 @@
 """Merge only after a genuine request, trusted policy and complete exact-head CI."""
 import base64
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import os
 from pathlib import Path
@@ -28,6 +28,13 @@ def sha(value):
 def timestamp(value):
     require(isinstance(value, str), "missing evidence timestamp")
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+# GitHub stamps a PR's `updated_at` when a comment is posted on it, typically a second
+# after the comment's own `created_at`. Tolerate that self-inflicted bump so a manual
+# request is not rejected as predating "changes" that are the request itself. Real PR
+# changes are still caught: the request must name the exact head and base commits.
+REQUEST_SKEW = timedelta(seconds=5)
 
 
 class API:
@@ -146,7 +153,7 @@ def validate_request(comment, pr, config, head, base, run, permission):
         require(pr["head"]["ref"].startswith("renovate/"), "unexpected Renovate branch")
         require(not {"manual-dependencies", "do-not-merge"} & {label["name"] for label in pr.get("labels", [])}, "manual dependency policy applies")
         return "renovate"
-    require(timestamp(comment["created_at"]) >= timestamp(pr["updated_at"]), "merge request predates PR changes")
+    require(timestamp(comment["created_at"]) + REQUEST_SKEW >= timestamp(pr["updated_at"]), "merge request predates PR changes")
     require(timestamp(comment["created_at"]) >= timestamp(run["updated_at"]), "merge request predates current CI evidence")
     require(permission in {"admin", "maintain", "write"}, "requester lacks merge permission")
     require(comment["body"] == f"/merge {head} {base}", "manual request must name the exact head and base commits")

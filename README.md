@@ -81,7 +81,9 @@ For a development PR, an authorized maintainer can request a merge with:
 
 Post the request after full CI finishes. Edited requests, requests predating PR
 changes or current CI, outstanding review requests, requested changes and missing
-current-head approvals block merging. The head must contain the latest default
+current-head approvals block merging. The `updated_at` bump GitHub applies to the
+PR when the request itself is posted is tolerated (a few seconds of skew); any real
+change still fails the exact head and base SHA match. The head must contain the latest default
 branch. CI must be the newest full run for that exact head, from the configured
 workflow and GitHub Actions app, with matching run attempts and check-suite IDs.
 
