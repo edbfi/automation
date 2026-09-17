@@ -245,8 +245,9 @@ def publish(payload, configs, roots, api, repository, workflow, expected_pr, exp
     print('Biome repair receipt:', json.dumps({**recovery, **evidence, 'parent': expected_head,
           'repository': repository, 'run_id': os.environ.get('GITHUB_RUN_ID'),
           'run_attempt': os.environ.get('GITHUB_RUN_ATTEMPT')}), flush=True)
-    if not eligible(api.call(f'/pulls/{expected_pr}'), repository, new_commit['sha']):
-        raise ValueError('PR changed after publication; CI handoff must be reconciled')
+    _, handed_off = version_change(api, repository, expected_pr, new_commit['sha'], package_directory)
+    if handed_off != evidence:
+        raise ValueError('PR base changed after publication; CI handoff must be reconciled')
     api.dispatch(workflow, pr['head']['ref'], expected_pr, new_commit['sha'])
     return new_commit['sha']
 

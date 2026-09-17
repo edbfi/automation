@@ -200,6 +200,20 @@ class RepairTests(unittest.TestCase):
             repair.publish(PAYLOAD, ['biome.json'], ['src'], api, REPO, 'ci.yml', 7, HEAD)
         self.assertFalse(any('/dispatches' in path for path, _, _ in api.calls))
 
+    def test_base_change_after_publication_prevents_dispatch(self):
+        api = FakeGitHub()
+        original = api.call
+        def call(path, data=None, method=None):
+            result = original(path, data, method)
+            if method == 'PATCH':
+                api.pr['base']['sha'] = 'd' * 40
+            return result
+        api.call = call
+        with self.assertRaisesRegex(ValueError, 'base changed after publication'):
+            repair.publish(PAYLOAD, ['biome.json'], ['src'], api, REPO, 'ci.yml', 7, HEAD)
+        self.assertEqual(api.pr['head']['sha'], NEW)
+        self.assertFalse(any('/dispatches' in path for path, _, _ in api.calls))
+
     def test_wrong_artifact_is_rejected_before_writes(self):
         api = FakeGitHub()
         with self.assertRaises(ValueError):
