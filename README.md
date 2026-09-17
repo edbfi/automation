@@ -160,3 +160,57 @@ Each consumer still runs its full required CI on the updated version.
 Publish immutable full-version releases only after the implementation PR and
 merged revision pass CI. Never move release tags. Callers reference versioned
 workflows, actions and presets.
+
+## Version-aware repair and CI recovery (v1.2.0)
+
+Installed Biome dependencies are pinned exactly by the base preset. The schema
+manager and dedicated Biome group remain enabled. Repair accepts the dedicated
+Biome route and `renovate/lock-file-maintenance` only when the selected package's
+locked stable Biome version changes against the current base. Standalone text Bun
+lockfiles are supported; ambiguous workspaces and unsupported resolutions fail
+closed. Both computation and publication verify this evidence. SVGs, manifests,
+lockfiles, workflows and other protected paths remain outside the repair output.
+
+The Python workflow resolves `setup-uv`'s `latest` stable version and logs it.
+Callers must retain frozen installs, lock validation and mutation checks; repeat
+runs may use different uv executables. Integration jobs must use the same policy.
+
+Copy `.github/workflows/repair-recovery.yml` into a consumer, replacing its local
+checkout/action steps with `edbfi/automation/actions/ci-recovery@v1.2.0` (keep Python
+setup and latest uv logging). Its run name, dispatch inputs and repository-wide
+concurrency group are part of the recovery protocol. Enable this explicit block
+in the trusted `.github/merge-policy.json`, using exactly the existing repair
+caller's paths and package directory:
+
+```json
+"repair_recovery": {
+  "enabled": true,
+  "automation_ref": "v1.2.0",
+  "package_directory": ".",
+  "config_files": ["biome.json"],
+  "source_roots": ["src", "tests"]
+}
+```
+
+Recovery runs only from the current default branch. It verifies the publication's
+shared workflow, exact run/attempt, publish log, parent/head, allowed diff and
+current base before dispatching full CI through the existing guarded inputs.
+Commit author text alone is not proof. Publication logs must remain available
+for the seven-day recovery window; expired or unavailable evidence blocks safely.
+The original one-day compute artifact is not needed for legacy recovery.
+
+An hourly reconciliation and repair/CI completion events discover missing CI and
+the specific newer `action_required` PR run with zero jobs. Active CI waits;
+deterministic failures block. A dispatch reservation is recorded as a separate
+Actions run **before** the CI POST. At most two reservations per repaired head
+can dispatch, including failed or uncertain requests; rerunning a reservation
+cannot dispatch again. Preserve Actions history for at least 30 days. Five-minute
+grace periods allow accepted runs to become visible. An uncertain dispatch POST
+is never blindly retried.
+
+A fresh run must satisfy the unchanged newest-run validator. Recovery never
+approves workflows, manufactures Renovate requests, or adds credentials. If GitHub
+still requires approval, the run URL identifies the maintainer's
+“Approve workflows to run” action. The merge helper reports when it is awaiting
+Renovate's genuine request. Disable recovery by setting `repair_recovery.enabled`
+to false; full CI and checked merging continue unchanged.

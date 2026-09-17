@@ -8,8 +8,8 @@ import re
 import subprocess
 import sys
 import tempfile
-import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 BOT = 'renovate[bot]'
@@ -54,6 +54,73 @@ def eligible(pr, repository, expected_head):
     )
 
 
+def jsonc(raw):
+    # Preserve quoted strings while removing JSONC comments and trailing commas.
+    cleaned = re.sub(r'"(?:\\.|[^"\\])*"|//[^\n]*|/\*.*?\*/|,(?=\s*[}\]])',
+                     lambda m: m[0] if m[0].startswith('"') else '', raw, flags=re.S)
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('duplicate lockfile key')
+            result[key] = value
+        return result
+    return json.loads(cleaned, object_pairs_hook=unique)
+
+
+def locked_version(manifest, lock):
+    deps = {**manifest.get('dependencies', {}), **manifest.get('devDependencies', {})}
+    declared = deps.get('@biomejs/biome')
+    workspaces = lock.get('workspaces', {})
+    if not declared or set(workspaces) != {''}:
+        raise ValueError('repair requires an unambiguous standalone Bun package directory')
+    workspace = workspaces['']
+    locked_deps = {**workspace.get('dependencies', {}), **workspace.get('devDependencies', {})}
+    if locked_deps.get('@biomejs/biome') != declared:
+        raise ValueError('Biome manifest and frozen lock disagree')
+    entry = lock.get('packages', {}).get('@biomejs/biome')
+    match = re.fullmatch(r'@biomejs/biome@(\d+\.\d+\.\d+)', entry[0]) if isinstance(entry, list) and entry else None
+    if not match or len(entry) != 4 or entry[1] != '' or not isinstance(entry[3], str) or not entry[3].startswith('sha512-'):
+        raise ValueError('repair requires a stable registry Biome lock entry')
+    if any(key.endswith('/@biomejs/biome') for key in lock['packages']):
+        raise ValueError('multiple Biome resolutions are not supported')
+    return match[1]
+
+
+def read_file(api, path, ref):
+    data = api.call('/contents/' + urllib.parse.quote(path, safe='/') + '?ref=' + ref)
+    if data.get('type') != 'file' or data.get('encoding') != 'base64' or data.get('size', 0) > 5_000_000:
+        raise ValueError('repair requires a regular bounded file')
+    return base64.b64decode(data['content'], validate=False).decode('utf-8')
+
+
+def version_change(api, repository, number, head, directory):
+    if directory != '.':
+        relative(directory)
+    pr = api.call(f'/pulls/{number}')
+    if not eligible(pr, repository, head) or not (
+            pr['head']['ref'] == 'renovate/lock-file-maintenance'
+            or re.fullmatch(r'renovate/biome(?:-[a-z0-9.-]+)?', pr['head']['ref'])):
+        raise ValueError('not an eligible current Renovate Biome or lock-maintenance PR')
+    repo = api.call('')
+    base = api.call('/git/ref/heads/' + urllib.parse.quote(repo['default_branch'], safe=''))['object']['sha']
+    if (repo['full_name'] != repository or repo['id'] != pr['base']['repo']['id']
+            or repo['id'] != pr['head']['repo']['id'] or pr['base']['ref'] != repo['default_branch']
+            or pr['base']['sha'] != base or not re.fullmatch(r'[0-9a-f]{40}', base)):
+        raise ValueError('repair repository or base changed')
+    compare = api.call(f'/compare/{base}...{head}')
+    if compare['behind_by'] != 0 or compare['merge_base_commit']['sha'] != base:
+        raise ValueError('repair head must include the latest base')
+    prefix = '' if directory == '.' else directory + '/'
+    versions = []
+    for ref in [base, head]:
+        manifest = json.loads(read_file(api, prefix + 'package.json', ref))
+        lock = jsonc(read_file(api, prefix + 'bun.lock', ref))
+        versions.append(locked_version(manifest, lock))
+    return pr, {'base': base, 'directory': directory, 'old_version': versions[0],
+                'new_version': versions[1], 'repository_id': repo['id']}
+
+
 class GitHub:
     def __init__(self, repository):
         self.base = f'https://api.github.com/repos/{repository}'
@@ -70,16 +137,9 @@ class GitHub:
 
     def dispatch(self, workflow, branch, pr_number, head):
         data = {'ref': branch, 'inputs': {'pr-number': str(pr_number), 'expected-head-sha': head}}
-        for attempt in range(3):
-            try:
-                return self.call(f'/actions/workflows/{workflow}/dispatches', data)
-            except urllib.error.HTTPError as error:
-                if error.code not in {429, 500, 502, 503, 504} or attempt == 2:
-                    raise
-            except urllib.error.URLError:
-                if attempt == 2:
-                    raise
-            time.sleep(2 ** attempt)
+        # A timeout/5xx may follow an accepted POST. Durable recovery reconciles
+        # run evidence instead of blindly creating another full CI run here.
+        return self.call(f'/actions/workflows/{workflow}/dispatches', data)
 
 
 def validate_payload(payload, configs, roots):
@@ -101,30 +161,9 @@ def validate_payload(payload, configs, roots):
 
 def compute(configs, roots, package_directory, api, pr_number, head, output):
     repository = os.environ['GITHUB_REPOSITORY']
-    pr = api.call(f'/pulls/{pr_number}')
-    if not eligible(pr, repository, head):
-        raise ValueError('not an eligible current same-repository Renovate PR')
-    if not pr['head']['ref'].startswith('renovate/biome'):
-        raise ValueError('repair requires the dedicated Renovate Biome group')
-    # A package update must be present; ordinary user PRs and standalone config edits are ineligible.
-    changed = []
-    page = 1
-    while True:
-        batch = api.call(f'/pulls/{pr_number}/files?per_page=100&page={page}')
-        changed.extend(item['filename'] for item in batch)
-        if len(batch) < 100:
-            break
-        page += 1
-        if page > 30:
-            raise ValueError('PR too large to inspect completely')
-    package = Path(package_directory) / 'package.json'
-    manifest = json.loads(package.read_text())
-    deps = {**manifest.get('dependencies', {}), **manifest.get('devDependencies', {})}
-    if '@biomejs/biome' not in deps:
-        raise ValueError('no installed Biome update surface found')
-    if not any(Path(p).name in {'package.json', 'bun.lock', 'bun.lockb'} for p in changed):
-        # Renovate also updates schema URLs independently. Normal CI checks those PRs;
-        # there is no dependency update to migrate and no formatter should run.
+    _, evidence = version_change(api, repository, pr_number, head, package_directory)
+    if evidence['old_version'] == evidence['new_version']:
+        print('No locked Biome version change in', package_directory)
         with Path(os.environ['GITHUB_OUTPUT']).open('a') as stream:
             stream.write('changed=false\n')
         return
@@ -133,7 +172,7 @@ def compute(configs, roots, package_directory, api, pr_number, head, output):
     subprocess.run(['bun', 'install', '--frozen-lockfile', '--ignore-scripts'], cwd=package_directory, env=tool_env, check=True)
     installed = json.loads((Path(package_directory) / 'node_modules/@biomejs/biome/package.json').read_text())
     version = installed.get('version', '')
-    if installed.get('name') != '@biomejs/biome' or not re.fullmatch(r'\d+\.\d+\.\d+', version):
+    if installed.get('name') != '@biomejs/biome' or version != evidence['new_version']:
         raise ValueError('repair requires an official stable Biome package version')
     # Install the official package outside the PR tree; never execute its .bin shim.
     with tempfile.TemporaryDirectory(prefix="biome-tool-") as tool_directory:
@@ -167,18 +206,18 @@ def compute(configs, roots, package_directory, api, pr_number, head, output):
             stream.write(f'changed={str(bool(files)).lower()}\n')
         if not files:
             return
-        payload = {'head': head, 'pr': pr_number, 'repository': repository, 'files': files}
+        payload = {'head': head, 'pr': pr_number, 'repository': repository, 'files': files, 'evidence': evidence}
         validate_payload(payload, configs, roots)
         Path(output).write_text(json.dumps(payload))
 
 
-def publish(payload, configs, roots, api, repository, workflow, expected_pr, expected_head):
+def publish(payload, configs, roots, api, repository, workflow, expected_pr, expected_head, package_directory='.'):
     if payload.get('repository') != repository or payload.get('pr') != expected_pr or payload.get('head') != expected_head:
         raise ValueError('artifact does not match the triggering PR/head')
     files = validate_payload(payload, configs, roots)
-    pr = api.call(f'/pulls/{expected_pr}')
-    if not eligible(pr, repository, expected_head) or not pr['head']['ref'].startswith('renovate/biome'):
-        raise ValueError('PR changed or is no longer eligible')
+    pr, evidence = version_change(api, repository, expected_pr, expected_head, package_directory)
+    if payload.get('evidence') != evidence or evidence['old_version'] == evidence['new_version']:
+        raise ValueError('repair version evidence changed')
     commit = api.call(f'/git/commits/{expected_head}')
     old_tree = api.call('/git/trees/' + commit['tree']['sha'] + '?recursive=1')
     if old_tree.get('truncated'):
@@ -196,10 +235,18 @@ def publish(payload, configs, roots, api, repository, workflow, expected_pr, exp
         'message': 'chore(deps): migrate Biome configuration and formatting\n\nSigned-off-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>',
         'tree': new_tree['sha'], 'parents': [expected_head],
         'author': {'name': 'github-actions[bot]', 'email': '41898282+github-actions[bot]@users.noreply.github.com'}})
-    # A racing push makes this non-fast-forward update fail; never overwrite it.
+    _, current = version_change(api, repository, expected_pr, expected_head, package_directory)
+    if current != evidence:
+        raise ValueError('repair base changed before publication')
+    # A competing forward push makes this update non-fast-forward; never force.
     api.call('/git/refs/heads/' + pr['head']['ref'], {'sha': new_commit['sha'], 'force': False}, 'PATCH')
     recovery = {'workflow': workflow, 'ref': pr['head']['ref'], 'pr-number': expected_pr, 'expected-head-sha': new_commit['sha']}
-    print('Full CI dispatch target (also usable for manual recovery):', json.dumps(recovery))
+    print('Full CI dispatch target (also usable for manual recovery):', json.dumps(recovery), flush=True)
+    print('Biome repair receipt:', json.dumps({**recovery, **evidence, 'parent': expected_head,
+          'repository': repository, 'run_id': os.environ.get('GITHUB_RUN_ID'),
+          'run_attempt': os.environ.get('GITHUB_RUN_ATTEMPT')}), flush=True)
+    if not eligible(api.call(f'/pulls/{expected_pr}'), repository, new_commit['sha']):
+        raise ValueError('PR changed after publication; CI handoff must be reconciled')
     api.dispatch(workflow, pr['head']['ref'], expected_pr, new_commit['sha'])
     return new_commit['sha']
 
@@ -219,7 +266,7 @@ def main():
         compute(configs, roots, directory, api, pr_number, head, os.environ['REPAIR_FILE'])
     elif sys.argv[1] == 'publish':
         payload = json.loads(Path(os.environ['REPAIR_FILE']).read_text())
-        print('Dispatched full CI for repaired commit', publish(payload, configs, roots, api, repository, os.environ['CI_WORKFLOW'], pr_number, head))
+        print('Dispatched full CI for repaired commit', publish(payload, configs, roots, api, repository, os.environ['CI_WORKFLOW'], pr_number, head, os.environ['PACKAGE_DIRECTORY']))
     else:
         raise ValueError('unknown repair operation')
 

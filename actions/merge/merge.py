@@ -292,6 +292,8 @@ def resume(api, repository, default_branch, number, event_run=None):
     if comments:
         comment = max(comments, key=lambda item: (timestamp(item["created_at"]), item["id"]))
         merge(api, repository, default_branch, number, comment["id"])
+    else:
+        print(f"PR #{number}: awaiting Renovate request ({config['renovate_comment']}).")
 
 
 def complete(api, default_branch, event_run):
