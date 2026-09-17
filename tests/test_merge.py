@@ -429,7 +429,7 @@ class RecoveryTests(unittest.TestCase):
                 if path == '/git/ref/heads/main':
                     return {'object': {'sha': BASE}}
                 raise AssertionError(path)
-            def pages(self, path, field):
+            def pages(self, path, field=None):
                 return deepcopy(records)
         return API()
 
@@ -519,7 +519,7 @@ class RecoveryEvidenceTests(unittest.TestCase):
                 if path == '/actions/runs/10':
                     return {'referenced_workflows': [{'path': self.ref}]}
                 return self.source.call(path)
-            def pages(self, path, field):
+            def pages(self, path, field=None):
                 if path.endswith('/reviews'):
                     return []
                 if path.startswith('/actions/workflows/1/runs'):

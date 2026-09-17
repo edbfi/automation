@@ -124,3 +124,19 @@ for (const ecosystem of [base, mergeChildConfig(base, mixed)]) {
   assert.equal(ruff.groupName, 'ruff');
   assert.equal(ruff.automerge, true);
 }
+
+const { parse: parseYaml } = await import('yaml');
+const pythonWorkflow = parseYaml(await readFile('.github/workflows/python.yml', 'utf8'));
+const pythonSteps = pythonWorkflow.jobs.verify.steps;
+assert.equal(pythonSteps.find((step) => step.uses?.startsWith('astral-sh/setup-uv@')).with.version, 'latest');
+assert.ok(pythonSteps.some((step) => step.run?.includes('uv --version') && step.run.includes('python --version')));
+assert.ok(pythonSteps.some((step) => step.run === 'git diff --exit-code HEAD'));
+assert.equal(pythonWorkflow.on.workflow_call.inputs['uv-version'], undefined);
+const repairWorkflow = parseYaml(await readFile('.github/workflows/biome-repair.yml', 'utf8'));
+for (const job of ['compute', 'publish']) {
+  const step = repairWorkflow.jobs[job].steps.find((step) => step.uses?.startsWith('edbfi/automation/actions/biome-repair@'));
+  assert.equal(step.with['package-directory'], '${{ inputs.package-directory }}');
+}
+assert.ok(repairWorkflow.jobs.compute.if.includes('renovate/lock-file-maintenance'));
+assert.equal(repairWorkflow.jobs.compute.permissions.contents, 'read');
+assert.equal(repairWorkflow.jobs.publish.permissions.contents, 'write');
