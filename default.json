@@ -88,6 +88,11 @@
       "groupName": "biome"
     },
     {
+      "matchManagers": ["npm", "bun"],
+      "matchPackageNames": ["@biomejs/biome"],
+      "rangeStrategy": "pin"
+    },
+    {
       "matchPackageNames": [
         "prek",
         "@j178/prek",

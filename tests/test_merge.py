@@ -379,3 +379,186 @@ class MergeTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+spec = importlib.util.spec_from_file_location('recovery', ROOT / 'actions/ci-recovery/recovery.py')
+recovery = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(recovery)
+
+
+class RecoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.now = recovery.timestamp('2026-09-17T12:00:00Z')
+        self.published = recovery.timestamp('2026-09-16T19:41:24Z')
+        self.green = {'id': 35142063850, 'event': 'workflow_dispatch', 'status': 'completed', 'conclusion': 'success',
+                      'created_at': '2026-09-16T19:41:24Z', 'run_started_at': '2026-09-16T19:41:24Z', 'run_attempt': 1,
+                      'html_url': 'https://github.com/edbfi/zondarr/actions/runs/35142063850'}
+        self.duplicate = {**self.green, 'id': 35142069414, 'event': 'pull_request', 'conclusion': 'action_required',
+                          'created_at': '2026-09-16T19:41:27Z', 'run_started_at': '2026-09-16T19:41:27Z',
+                          'html_url': 'https://github.com/edbfi/zondarr/actions/runs/35142069414'}
+        self.candidate = {'head': HEAD, 'base': BASE, 'branch': 'renovate/biome', 'parent': 'd' * 40,
+                          'proof': {'run': 1}, 'outcome': 'recover: missing post-repair dispatch'}
+        self.inputs = {'pr-number': '206', 'expected-head-sha': HEAD, 'expected-base-sha': BASE}
+
+    def test_observed_206_ordering_requires_new_full_ci(self):
+        self.assertEqual(recovery.classification([self.green, self.duplicate], [], self.published, self.now),
+                         'recover: approval-required duplicate with zero jobs')
+        for conclusion in ['failure', 'cancelled', 'timed_out', 'skipped']:
+            self.assertTrue(recovery.classification([self.green, {**self.duplicate, 'conclusion': conclusion}], [], self.published, self.now).startswith('blocked:'))
+        self.assertTrue(recovery.classification([self.green, self.duplicate], [{'name': 'guard'}], self.published, self.now).startswith('blocked:'))
+        self.assertTrue(recovery.classification([{**self.green, 'conclusion': 'failure'}, self.duplicate], [], self.published, self.now).startswith('blocked:'))
+
+    def test_pending_and_successful_runs_do_not_dispatch(self):
+        for status in ['queued', 'in_progress', 'waiting', 'pending']:
+            outcome = recovery.classification([self.green, {**self.duplicate, 'status': status}], [], self.published, self.now)
+            self.assertTrue(outcome.startswith('awaiting CI:'))
+        self.assertFalse(recovery.classification([self.green], [], self.published, self.now).startswith('recover:'))
+        self.assertTrue(recovery.classification([], [], self.now, self.now).startswith('awaiting CI:'))
+        self.assertTrue(recovery.classification([], [], self.published, self.now).startswith('recover:'))
+
+    def api(self, records):
+        class API:
+            def __init__(self):
+                self.writes = []
+            def request(self, path, method='GET', data=None):
+                if method == 'POST':
+                    self.writes.append((path, data))
+                    return None
+                if path == '/actions/workflows/repair-recovery.yml':
+                    return {'id': 9, 'path': '.github/workflows/repair-recovery.yml', 'state': 'active'}
+                if path == '/git/ref/heads/main':
+                    return {'object': {'sha': BASE}}
+                raise AssertionError(path)
+            def pages(self, path, field=None):
+                return deepcopy(records)
+        return API()
+
+    def record(self, number=1, **changes):
+        return {'id': number, 'display_title': f'Repair CI #206 {HEAD}', 'workflow_id': 9, 'event': 'workflow_dispatch',
+                'head_branch': 'main', 'status': 'completed', 'updated_at': '2026-09-16T20:00:00Z', **changes}
+
+    def reconcile(self, api, inputs=None, run_id=1):
+        with patch.object(recovery, 'candidate', return_value=self.candidate), patch.dict(os.environ, {'GITHUB_RUN_ATTEMPT': '1'}):
+            recovery.reconcile(api, REPOSITORY, 'main', BASE, {'ci_workflow': 'ci.yml'}, 206, self.now, inputs or {}, run_id)
+
+    def test_reservation_precedes_ci_and_duplicate_events_wait(self):
+        api = self.api([])
+        self.reconcile(api)
+        self.assertEqual(api.writes, [('/actions/workflows/repair-recovery.yml/dispatches', {'ref': 'main', 'inputs': self.inputs})])
+        for record in [self.record(status='in_progress'), self.record(updated_at='2026-09-17T11:59:00Z')]:
+            api = self.api([record])
+            self.reconcile(api)
+            self.assertFalse(api.writes)
+
+    def test_only_two_recorded_attempts_and_no_reruns(self):
+        api = self.api([self.record()])
+        self.reconcile(api, self.inputs)
+        self.assertEqual(api.writes[0][1], {'ref': 'renovate/biome', 'inputs': {'pr-number': '206', 'expected-head-sha': HEAD}})
+        for records, run_id, inputs in [([], 1, self.inputs), ([self.record(), self.record(2)], 3, {}),
+                                       ([self.record(), self.record(2), self.record(3)], 3, self.inputs)]:
+            api = self.api(records)
+            with self.assertRaises(recovery.Blocked):
+                self.reconcile(api, inputs, run_id)
+            self.assertFalse(api.writes)
+        with patch.object(recovery, 'candidate', return_value=self.candidate), patch.dict(os.environ, {'GITHUB_RUN_ATTEMPT': '2'}):
+            api = self.api([self.record()])
+            with self.assertRaises(recovery.Blocked):
+                recovery.reconcile(api, REPOSITORY, 'main', BASE, {'ci_workflow': 'ci.yml'}, 206, self.now, self.inputs, 1)
+            self.assertFalse(api.writes)
+
+    def test_stale_requests_and_racing_evidence_block(self):
+        for key in ['expected-head-sha', 'expected-base-sha']:
+            api = self.api([self.record()])
+            with self.assertRaises(recovery.Blocked):
+                self.reconcile(api, {**self.inputs, key: 'f' * 40})
+            self.assertFalse(api.writes)
+        api = self.api([self.record()])
+        with patch.object(recovery, 'candidate', side_effect=[self.candidate, {**self.candidate, 'head': 'f' * 40}]), patch.dict(os.environ, {'GITHUB_RUN_ATTEMPT': '1'}):
+            with self.assertRaises(recovery.Blocked):
+                recovery.reconcile(api, REPOSITORY, 'main', BASE, {'ci_workflow': 'ci.yml'}, 206, self.now, self.inputs, 1)
+        self.assertFalse(api.writes)
+
+    def test_uncertain_dispatch_does_not_loop(self):
+        api = self.api([self.record()])
+        original = api.request
+        def request(path, method='GET', data=None):
+            result = original(path, method, data)
+            if method == 'POST':
+                raise OSError('response lost after acceptance')
+            return result
+        api.request = request
+        with self.assertRaises(OSError):
+            self.reconcile(api, self.inputs)
+        self.assertEqual(len(api.writes), 1)
+
+
+class RecoveryEvidenceTests(unittest.TestCase):
+    def api(self):
+        from test_repair import FakeGitHub, HEAD as PARENT, NEW as REPAIRED, BASE as DEFAULT, REPO
+        class API:
+            def __init__(self):
+                self.source = FakeGitHub()
+                self.source.pr['head']['sha'] = REPAIRED
+                self.commit = {'author': {'id': 41898282, 'login': 'github-actions[bot]', 'type': 'Bot'},
+                    'parents': [{'sha': PARENT}], 'commit': {'tree': {'sha': 'tree'},
+                    'message': 'chore(deps): migrate Biome configuration and formatting\n\nSigned-off-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>'}}
+                self.files = [{'filename': 'biome.json', 'status': 'modified'}]
+                self.ref = 'edbfi/automation/.github/workflows/biome-repair.yml@v1.1.3'
+                self.created = '2026-09-16T19:41:00Z'
+                self.receipt = {'workflow': 'ci.yml', 'ref': 'renovate/biome', 'pr-number': 7, 'expected-head-sha': REPAIRED}
+                self.ci = []
+            def request(self, path, method='GET', data=None):
+                assert method == 'GET', 'candidate must never write'
+                if path == '/commits/' + REPAIRED:
+                    return deepcopy(self.commit)
+                if path == f'/compare/{PARENT}...{REPAIRED}':
+                    return {'ahead_by': 1, 'behind_by': 0, 'files': deepcopy(self.files)}
+                if path.startswith('/actions/workflows/'):
+                    filename = path.rsplit('/', 1)[-1]
+                    return {'id': 1 if filename == 'biome-repair.yml' else 2, 'path': '.github/workflows/' + filename, 'state': 'active'}
+                if path == '/actions/runs/10':
+                    return {'referenced_workflows': [{'path': self.ref}]}
+                return self.source.call(path)
+            def pages(self, path, field=None):
+                if path.endswith('/reviews'):
+                    return []
+                if path.startswith('/actions/workflows/1/runs'):
+                    return [{'id': 10, 'workflow_id': 1, 'head_sha': PARENT, 'head_branch': 'renovate/biome',
+                             'event': 'pull_request_target', 'status': 'completed', 'conclusion': 'failure',
+                             'pull_requests': [{'number': 7}], 'created_at': self.created, 'run_attempt': 1}]
+                if path == '/actions/runs/10/attempts/1/jobs':
+                    return [{'id': 11, 'name': 'repair / publish', 'status': 'completed', 'conclusion': 'failure',
+                             'run_attempt': 1, 'run_id': 10, 'completed_at': '2026-09-16T19:41:26Z'}]
+                if path.startswith('/actions/workflows/2/runs'):
+                    return deepcopy(self.ci)
+                if path.endswith('/jobs'):
+                    return []
+                raise AssertionError(path)
+            def job_log(self, job):
+                assert job == 11
+                return '2026-09-16T19:41:24Z Full CI dispatch target (also usable for manual recovery): ' + json.dumps(self.receipt)
+        return API(), REPO, DEFAULT
+
+    def candidate(self, api, repo, base):
+        return recovery.candidate(api, repo, 'main', base, {'ci_workflow': 'ci.yml', 'repair_recovery': {
+            'automation_ref': 'v1.2.0', 'package_directory': '.', 'config_files': ['biome.json'], 'source_roots': ['src']}},
+            7, recovery.timestamp('2026-09-17T12:00:00Z'))
+
+    def test_missing_dispatch_after_proved_publication_is_recoverable(self):
+        api, repo, base = self.api()
+        result = self.candidate(api, repo, base)
+        self.assertEqual(result['outcome'], 'recover: missing post-repair dispatch')
+        self.assertEqual(result['proof']['run'], 10)
+
+    def test_spoofed_provenance_expired_logs_and_forbidden_files_fail(self):
+        for kind in ['author', 'workflow', 'receipt', 'expired', 'forbidden', 'new-file', 'stale']:
+            api, repo, base = self.api()
+            if kind == 'author': api.commit['author']['id'] = 1
+            if kind == 'workflow': api.ref = 'attacker/automation/.github/workflows/biome-repair.yml@v1.1.3'
+            if kind == 'receipt': api.receipt['expected-head-sha'] = 'f' * 40
+            if kind == 'expired': api.created = '2026-08-01T00:00:00Z'
+            if kind == 'forbidden': api.files[0]['filename'] = '.github/workflows/ci.yml'
+            if kind == 'new-file': api.files[0]['status'] = 'added'
+            if kind == 'stale': api.source.pr['base']['sha'] = 'f' * 40
+            with self.subTest(kind=kind), self.assertRaises(recovery.Blocked):
+                self.candidate(api, repo, base)

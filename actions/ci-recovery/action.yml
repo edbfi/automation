@@ -1,0 +1,13 @@
+name: Recover interrupted repair CI
+description: Reconcile trusted repair publication with bounded complete CI dispatches.
+inputs:
+  token:
+    required: true
+    description: Repository token with Actions write and contents/pull-requests read.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+      run: python3 "$GITHUB_ACTION_PATH/recovery.py"

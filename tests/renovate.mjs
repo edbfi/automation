@@ -92,3 +92,51 @@ for (const updateType of ['major', 'minor', 'patch', 'pin', 'digest', 'lockFileM
     assert.equal(result.ignoreTests, false);
   }
 }
+
+// Real Bun extraction, then resolved policy in the consumers' preset order.
+const { extractAllPackageFiles } = await import('../node_modules/renovate/dist/modules/manager/bun/index.js');
+const extractedBun = await extractAllPackageFiles({}, ['package.json', 'bun.lock']);
+const installedBiome = extractedBun.flatMap((file) => file.deps).find((dep) => dep.depName === '@biomejs/biome');
+assert.ok(installedBiome);
+const mixed = await read('mixed');
+for (const ecosystem of [base, mergeChildConfig(base, mixed)]) {
+  const consumer = mergeChildConfig(mergeChildConfig(ecosystem, await read('automerge')), {
+    gitIgnoredAuthors: ['41898282+github-actions[bot]@users.noreply.github.com'],
+  });
+  for (const manager of ['bun', 'npm']) {
+    for (const updateType of ['major', 'minor', 'patch', 'pin', 'lockFileMaintenance']) {
+      const result = await policy(consumer, { ...installedBiome, packageName: installedBiome.depName, manager, currentValue: '^2.4.11', currentVersion: '2.4.11', updateType });
+      assert.equal(result.rangeStrategy, 'pin');
+      assert.equal(result.groupName, 'biome');
+      assert.equal(result.automerge, true);
+      assert.equal(result.ignoreTests, false);
+      assert.equal(result.platformAutomerge, false);
+    }
+  }
+  const schema = await policy(consumer, { manager: 'custom.jsonata', datasource: 'npm', depName: '@biomejs/biome', packageName: '@biomejs/biome' });
+  assert.equal(schema.groupName, 'biome');
+  assert.notEqual(schema.rangeStrategy, 'pin');
+  assert.equal(schema.automerge, true);
+  assert.equal(consumer.rebaseWhen, 'behind-base-branch');
+  assert.deepEqual(consumer.gitIgnoredAuthors, ['41898282+github-actions[bot]@users.noreply.github.com']);
+  const ruff = await policy(mergeChildConfig(consumer, { packageRules: [{ matchPackageNames: ['ruff'], groupName: 'ruff' }] }),
+    { manager: 'pep621', datasource: 'pypi', depName: 'ruff', packageName: 'ruff', currentValue: '==0.16.8', currentVersion: '0.16.8' });
+  assert.equal(ruff.groupName, 'ruff');
+  assert.equal(ruff.automerge, true);
+}
+
+const { parse: parseYaml } = await import('yaml');
+const pythonWorkflow = parseYaml(await readFile('.github/workflows/python.yml', 'utf8'));
+const pythonSteps = pythonWorkflow.jobs.verify.steps;
+assert.equal(pythonSteps.find((step) => step.uses?.startsWith('astral-sh/setup-uv@')).with.version, 'latest');
+assert.ok(pythonSteps.some((step) => step.run?.includes('uv --version') && step.run.includes('python --version')));
+assert.ok(pythonSteps.some((step) => step.run === 'git diff --exit-code HEAD'));
+assert.equal(pythonWorkflow.on.workflow_call.inputs['uv-version'], undefined);
+const repairWorkflow = parseYaml(await readFile('.github/workflows/biome-repair.yml', 'utf8'));
+for (const job of ['compute', 'publish']) {
+  const step = repairWorkflow.jobs[job].steps.find((step) => step.uses?.startsWith('edbfi/automation/actions/biome-repair@'));
+  assert.equal(step.with['package-directory'], '${{ inputs.package-directory }}');
+}
+assert.ok(repairWorkflow.jobs.compute.if.includes('renovate/lock-file-maintenance'));
+assert.equal(repairWorkflow.jobs.compute.permissions.contents, 'read');
+assert.equal(repairWorkflow.jobs.publish.permissions.contents, 'write');
