@@ -1,6 +1,7 @@
 import base64
 import copy
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -41,6 +42,7 @@ class FakeGitHub:
         self.old_version = '2.4.11'
         self.new_version = '2.5.13'
         self.directory = '.'
+        self.ref = HEAD
 
     def call(self, path, data=None, method=None):
         self.calls.append((path, data, method))
@@ -50,6 +52,8 @@ class FakeGitHub:
             return {'id': 123, 'full_name': REPO, 'default_branch': 'main'}
         if path == '/git/ref/heads/main':
             return {'object': {'sha': self.pr['base']['sha']}}
+        if path == '/git/ref/heads/renovate%2Fbiome':
+            return {'object': {'sha': self.ref}}
         if path.startswith('/compare/'):
             return {'behind_by': 0, 'merge_base_commit': {'sha': self.pr['base']['sha']}}
         if path.startswith('/contents/'):
@@ -78,6 +82,7 @@ class FakeGitHub:
             if self.race:
                 raise RuntimeError('non-fast-forward')
             self.pr['head']['sha'] = NEW
+            self.ref = NEW
             return {}
         if path == '/actions/workflows/ci.yml/dispatches':
             assert data == {'ref': 'renovate/biome', 'inputs': {'pr-number': '7', 'expected-head-sha': NEW}}
@@ -86,6 +91,70 @@ class FakeGitHub:
 
 
 class RepairTests(unittest.TestCase):
+    def test_only_branch_update_receives_app_credential(self):
+        requests = []
+        def open_request(request, timeout):
+            requests.append(request)
+            return io.BytesIO(b'{}')
+        with patch.dict(os.environ, {'GH_TOKEN': 'workflow-test', 'PUBLISH_TOKEN': 'app-test'}, clear=True), \
+                patch.object(repair.urllib.request, 'urlopen', side_effect=open_request):
+            api = repair.GitHub(REPO)
+            api.call('/pulls/7')
+            api.call('/git/commits', {'parents': [HEAD]})
+            api.call('/git/refs/heads/renovate/biome', {'sha': NEW, 'force': False}, 'PATCH')
+            api.dispatch('ci.yml', 'renovate/biome', 7, NEW)
+        self.assertEqual([r.get_header('Authorization') for r in requests],
+                         ['Bearer workflow-test', 'Bearer workflow-test', 'Bearer app-test', 'Bearer workflow-test'])
+
+    def test_branch_update_without_app_token_fails_before_network(self):
+        with patch.dict(os.environ, {'GH_TOKEN': 'workflow-test'}, clear=True), \
+                patch.object(repair.urllib.request, 'urlopen') as network, self.assertRaisesRegex(ValueError, 'GitHub App token'):
+            repair.GitHub(REPO).call('/git/refs/heads/renovate/biome', {'sha': NEW, 'force': False}, 'PATCH')
+        network.assert_not_called()
+
+    def test_pr_head_propagation_retries_reads_without_republishing(self):
+        for stale_reads in [2, 10]:
+            api = FakeGitHub()
+            original = api.call
+            reads = 0
+            def call(path, data=None, method=None):
+                nonlocal reads
+                result = original(path, data, method)
+                if path == '/pulls/7' and api.ref == NEW:
+                    reads += 1
+                    if reads <= stale_reads:
+                        result['head']['sha'] = HEAD
+                return result
+            api.call = call
+            with patch.object(repair.time, 'sleep') as sleep:
+                if stale_reads == 2:
+                    self.assertEqual(repair.publish(PAYLOAD, ['biome.json'], ['src'], api, REPO, 'ci.yml', 7, HEAD), NEW)
+                    self.assertEqual(sleep.call_count, 2)
+                else:
+                    with self.assertRaisesRegex(ValueError, 'not visible'):
+                        repair.publish(PAYLOAD, ['biome.json'], ['src'], api, REPO, 'ci.yml', 7, HEAD)
+                    self.assertEqual(sleep.call_count, 4)
+                    self.assertFalse(any('/dispatches' in p for p, _, _ in api.calls))
+            self.assertEqual(sum(method == 'PATCH' for _, _, method in api.calls), 1)
+
+    def test_racing_push_during_head_propagation_fails_without_retry(self):
+        for changed in ['ref', 'pr']:
+            api = FakeGitHub()
+            original = api.call
+            def call(path, data=None, method=None):
+                result = original(path, data, method)
+                if method == 'PATCH':
+                    if changed == 'ref':
+                        api.ref = 'd' * 40
+                    else:
+                        api.pr['head']['sha'] = 'd' * 40
+                return result
+            api.call = call
+            with patch.object(repair.time, 'sleep') as sleep, self.assertRaisesRegex(ValueError, 'changed after publication'):
+                repair.publish(PAYLOAD, ['biome.json'], ['src'], api, REPO, 'ci.yml', 7, HEAD)
+            sleep.assert_not_called()
+            self.assertFalse(any('/dispatches' in p for p, _, _ in api.calls))
+
     def test_uncertain_dispatch_is_not_blindly_retried(self):
         api = FakeGitHub()
         original = api.call

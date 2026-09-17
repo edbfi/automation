@@ -140,3 +140,21 @@ for (const job of ['compute', 'publish']) {
 assert.ok(repairWorkflow.jobs.compute.if.includes('renovate/lock-file-maintenance'));
 assert.equal(repairWorkflow.jobs.compute.permissions.contents, 'read');
 assert.equal(repairWorkflow.jobs.publish.permissions.contents, 'write');
+assert.equal(repairWorkflow.on.workflow_call.inputs['repair-app-client-id'].required, true);
+assert.equal(repairWorkflow.on.workflow_call.secrets['repair-app-private-key'].required, true);
+assert.ok(!JSON.stringify(repairWorkflow.jobs.compute).includes('private-key'));
+assert.ok(!JSON.stringify(repairWorkflow.jobs.compute).includes('publish-token'));
+const publisherSteps = repairWorkflow.jobs.publish.steps;
+assert.ok(!publisherSteps.some((step) => step.uses?.startsWith('actions/checkout@')));
+const appToken = publisherSteps.find((step) => step.uses?.startsWith('actions/create-github-app-token@'));
+assert.deepEqual(appToken.with, {
+  'client-id': '${{ inputs.repair-app-client-id }}',
+  'private-key': '${{ secrets.repair-app-private-key }}',
+  owner: '${{ github.repository_owner }}',
+  repositories: '${{ github.event.repository.name }}',
+  'permission-contents': 'write',
+});
+assert.equal(appToken.with['skip-token-revoke'], undefined);
+const publication = publisherSteps.find((step) => step.with?.operation === 'publish');
+assert.equal(publication.with.token, '${{ github.token }}');
+assert.equal(publication.with['publish-token'], '${{ steps.publisher.outputs.token }}');

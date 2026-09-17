@@ -14,6 +14,12 @@ on:
       bun-version:
         type: string
         required: true
+      repair-app-client-id:
+        type: string
+        required: true
+    secrets:
+      repair-app-private-key:
+        required: true
 permissions: {}
 jobs:
   compute:
@@ -38,7 +44,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2.2.0
         with:
           bun-version: ${{ inputs.bun-version }}
-      - uses: edbfi/automation/actions/biome-repair@v1.2.0
+      - uses: edbfi/automation/actions/biome-repair@v2.0.0
         id: repair
         with:
           operation: compute
@@ -70,10 +76,19 @@ jobs:
         with:
           name: biome-repair-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/repair
-      - uses: edbfi/automation/actions/biome-repair@v1.2.0
+      - uses: actions/create-github-app-token@v3.2.0
+        id: publisher
+        with:
+          client-id: ${{ inputs.repair-app-client-id }}
+          private-key: ${{ secrets.repair-app-private-key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+      - uses: edbfi/automation/actions/biome-repair@v2.0.0
         with:
           operation: publish
           token: ${{ github.token }}
+          publish-token: ${{ steps.publisher.outputs.token }}
           pr-number: ${{ github.event.pull_request.number }}
           expected-head: ${{ github.event.pull_request.head.sha }}
           config-files: ${{ inputs.config-files }}

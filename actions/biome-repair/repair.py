@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -94,10 +95,25 @@ def read_file(api, path, ref):
     return base64.b64decode(data['content'], validate=False).decode('utf-8')
 
 
-def version_change(api, repository, number, head, directory):
+def version_change(api, repository, number, head, directory, *, published_parent=None):
     if directory != '.':
         relative(directory)
     pr = api.call(f'/pulls/{number}')
+    if published_parent is not None:
+        # The ref update can become visible before the PR's head cache catches up.
+        # Retry only reads of our known parent; any competing ref fails immediately.
+        for attempt in range(5):
+            ref = api.call('/git/ref/heads/' + urllib.parse.quote(pr['head']['ref'], safe=''))
+            if ref['object']['sha'] != head:
+                raise ValueError('repair head changed after publication')
+            if pr['head']['sha'] == head:
+                break
+            if not eligible(pr, repository, published_parent):
+                raise ValueError('PR changed after publication')
+            if attempt == 4:
+                raise ValueError('published repair head is not visible; CI handoff must be reconciled')
+            time.sleep(1)
+            pr = api.call(f'/pulls/{number}')
     if not eligible(pr, repository, head) or not (
             pr['head']['ref'] == 'renovate/lock-file-maintenance'
             or re.fullmatch(r'renovate/biome(?:-[a-z0-9.-]+)?', pr['head']['ref'])):
@@ -127,8 +143,15 @@ class GitHub:
 
     def call(self, path, data=None, method=None):
         payload = json.dumps(data).encode() if data is not None else None
+        token = os.environ['GH_TOKEN']
+        # Only the branch update uses the App identity. Reads, Git object creation
+        # and guarded CI dispatch retain the workflow's existing credential.
+        if method == 'PATCH' and path.startswith('/git/refs/heads/'):
+            token = os.environ.get('PUBLISH_TOKEN')
+            if not token:
+                raise ValueError('publication requires a repository-scoped GitHub App token')
         request = urllib.request.Request(self.base + path, data=payload, method=method,
-            headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+            headers={'Authorization': 'Bearer ' + token,
                      'Content-Type': 'application/json',
                      'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'})
         with urllib.request.urlopen(request, timeout=60) as response:
@@ -245,7 +268,8 @@ def publish(payload, configs, roots, api, repository, workflow, expected_pr, exp
     print('Biome repair receipt:', json.dumps({**recovery, **evidence, 'parent': expected_head,
           'repository': repository, 'run_id': os.environ.get('GITHUB_RUN_ID'),
           'run_attempt': os.environ.get('GITHUB_RUN_ATTEMPT')}), flush=True)
-    _, handed_off = version_change(api, repository, expected_pr, new_commit['sha'], package_directory)
+    _, handed_off = version_change(api, repository, expected_pr, new_commit['sha'], package_directory,
+                                  published_parent=expected_head)
     if handed_off != evidence:
         raise ValueError('PR base changed after publication; CI handoff must be reconciled')
     api.dispatch(workflow, pr['head']['ref'], expected_pr, new_commit['sha'])
@@ -266,6 +290,8 @@ def main():
             relative(directory)
         compute(configs, roots, directory, api, pr_number, head, os.environ['REPAIR_FILE'])
     elif sys.argv[1] == 'publish':
+        if not os.environ.get('PUBLISH_TOKEN'):
+            raise ValueError('publication requires a repository-scoped GitHub App token')
         payload = json.loads(Path(os.environ['REPAIR_FILE']).read_text())
         print('Dispatched full CI for repaired commit', publish(payload, configs, roots, api, repository, os.environ['CI_WORKFLOW'], pr_number, head, os.environ['PACKAGE_DIRECTORY']))
     else:

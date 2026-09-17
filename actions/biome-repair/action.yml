@@ -7,6 +7,9 @@ inputs:
   token:
     required: true
     description: Read-only for computation; repository-scoped write token only for publishing.
+  publish-token:
+    default: ''
+    description: Repository-scoped App token, required for publication and used only for the non-force branch update.
   pr-number:
     required: true
     description: Triggering PR number.
@@ -43,6 +46,7 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.token }}
+        PUBLISH_TOKEN: ${{ inputs.publish-token }}
         PR_NUMBER: ${{ inputs.pr-number }}
         EXPECTED_HEAD: ${{ inputs.expected-head }}
         CONFIG_FILES: ${{ inputs.config-files }}
