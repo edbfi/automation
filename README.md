@@ -214,3 +214,44 @@ still requires approval, the run URL identifies the maintainer's
 “Approve workflows to run” action. The merge helper reports when it is awaiting
 Renovate's genuine request. Disable recovery by setting `repair_recovery.enabled`
 to false; full CI and checked merging continue unchanged.
+
+## App-authenticated repair publication (v2.0.0)
+
+Version 2 requires a GitHub App for repair branch updates. GitHub puts PR workflows
+triggered by `GITHUB_TOKEN` updates into an approval-required state; a successful
+dispatched run does not clear that platform approval. App-authenticated updates
+can start ordinary PR CI automatically.
+
+Install a private App only on the intended consumer repositories, with Contents
+read/write and the mandatory Metadata read permission. No Actions, Checks,
+Workflows, Administration or Pull requests permissions are needed by the App.
+Store its Client ID in the repository variable `RENOVATE_REPAIR_APP_CLIENT_ID`
+and its private key in the Actions secret `RENOVATE_REPAIR_APP_PRIVATE_KEY`.
+In each consumer's reusable repair call, add:
+
+```yaml
+with:
+  repair-app-client-id: ${{ vars.RENOVATE_REPAIR_APP_CLIENT_ID }}
+  # Retain the existing explicit config/source allowlists and Bun version.
+secrets:
+  repair-app-private-key: ${{ secrets.RENOVATE_REPAIR_APP_PRIVATE_KEY }}
+```
+
+Only the trusted publication job receives the private key. It mints a short-lived
+token restricted to the current repository and Contents write, and revokes it at
+job completion. Only the non-force branch update uses that token. Artifact
+validation, Git object creation and guarded full-CI dispatch use the existing
+workflow token. No PR code is checked out or executed in publication. Commit
+authorship and its DCO remain `github-actions[bot]`, so keep the existing narrow
+`gitIgnoredAuthors` entry; do not ignore human changes.
+
+The publisher tolerates a lagging PR-head read for at most four seconds after its
+single branch update. Every retry checks that the live ref is still exactly the
+published commit. Unexpected heads fail immediately, and all repository, base,
+version and path checks still apply. Publication and CI POSTs are never blindly
+retried. Normal PR CI and the guarded dispatch both run complete validation;
+the newest-run merge rule remains unchanged.
+
+Upgrade preset, workflow and action references together. This is a major release
+because the repair workflow requires the App inputs and direct publish-action
+callers must provide `publish-token`; there is no silent `GITHUB_TOKEN` fallback.
