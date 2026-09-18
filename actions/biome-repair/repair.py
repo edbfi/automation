@@ -190,16 +190,16 @@ def compute(configs, roots, package_directory, api, pr_number, head, output):
         with Path(os.environ['GITHUB_OUTPUT']).open('a') as stream:
             stream.write('changed=false\n')
         return
-    # Neither dependency installation nor the formatter receives the API token.
+    # Neither tool installation nor the formatter receives API credentials.
     tool_env = {key: value for key, value in os.environ.items() if key in {'PATH', 'HOME', 'TMPDIR', 'LANG', 'SYSTEMROOT'}}
-    subprocess.run(['bun', 'install', '--frozen-lockfile', '--ignore-scripts'], cwd=package_directory, env=tool_env, check=True)
-    installed = json.loads((Path(package_directory) / 'node_modules/@biomejs/biome/package.json').read_text())
-    version = installed.get('version', '')
-    if installed.get('name') != '@biomejs/biome' or version != evidence['new_version']:
-        raise ValueError('repair requires an official stable Biome package version')
-    # Install the official package outside the PR tree; never execute its .bin shim.
+    version = evidence['new_version']
+    # The lock selects the exact tool version; normal CI validates the app's install.
+    # Install only the official package outside the PR tree; never execute a PR-owned .bin shim.
     with tempfile.TemporaryDirectory(prefix="biome-tool-") as tool_directory:
         subprocess.run(['bun', 'add', '--exact', '--ignore-scripts', '--registry=https://registry.npmjs.org', f'@biomejs/biome@{version}'], cwd=tool_directory, env=tool_env, check=True)
+        installed = json.loads((Path(tool_directory) / 'node_modules/@biomejs/biome/package.json').read_text())
+        if installed.get('name') != '@biomejs/biome' or installed.get('version') != version:
+            raise ValueError('repair requires an official stable Biome package version')
         binary = (Path(tool_directory) / 'node_modules/.bin/biome').resolve(strict=True)
         tracked = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
         sources = [p for p in tracked if p and p not in configs and allowed(p, configs, roots)]
