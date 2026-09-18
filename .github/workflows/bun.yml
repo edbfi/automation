@@ -11,8 +11,13 @@ on:
         type: string
         required: true
       working-directory:
+        description: Directory in which the validation command runs.
         type: string
         default: .
+      install-directory:
+        description: Bun lockfile root; defaults to working-directory. Set to the workspace root for a workspace member.
+        type: string
+        default: ''
       node-version:
         description: Node version for tools whose executables use a Node shebang.
         type: string
@@ -49,11 +54,26 @@ jobs:
       - uses: actions/setup-node@v7.0.0
         with:
           node-version: ${{ inputs.node-version }}
+      - name: Validate lockfile root
+        working-directory: ${{ inputs.install-directory || inputs.working-directory }}
+        run: |
+          test -f package.json
+          locks=0
+          for lock in bun.lock bun.lockb; do
+            if test -f "$lock"; then
+              locks=$((locks + 1))
+            fi
+          done
+          if test "$locks" -ne 1; then
+            echo 'Expected exactly one bun.lock or bun.lockb in install-directory.' >&2
+            exit 1
+          fi
       - uses: actions/cache@v6.1.0
         with:
           path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ runner.arch }}-${{ inputs.version }}-${{ hashFiles('**/bun.lock', '**/bun.lockb') }}
+          key: bun-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.version }}-${{ hashFiles(format('{0}/bun.lock', inputs.install-directory || inputs.working-directory), format('{0}/bun.lockb', inputs.install-directory || inputs.working-directory)) }}
       - run: bun install --frozen-lockfile
+        working-directory: ${{ inputs.install-directory || inputs.working-directory }}
       - name: Run required check
         env:
           CHECK_COMMAND: ${{ inputs.command }}

@@ -1,0 +1,33 @@
+name: Application smoke test
+description: Start a local application, wait for HTTP readiness, run its assertions and clean up.
+inputs:
+  start-command:
+    description: Foreground application command; runtimes, dependencies and build must already be prepared.
+    required: true
+  url:
+    description: Loopback HTTP or HTTPS readiness URL; only a 2xx response is ready.
+    required: true
+  test-command:
+    description: Required application assertion, such as a browser test or an SSR content check.
+    required: true
+  working-directory:
+    description: Directory for both commands.
+    default: .
+  timeout-seconds:
+    description: Startup deadline in seconds (greater than zero, at most 3600).
+    default: '60'
+  test-timeout-seconds:
+    description: Assertion deadline in seconds (greater than zero, at most 3600).
+    default: '120'
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        SMOKE_START_COMMAND: ${{ inputs.start-command }}
+        SMOKE_URL: ${{ inputs.url }}
+        SMOKE_TEST_COMMAND: ${{ inputs.test-command }}
+        SMOKE_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        SMOKE_TIMEOUT_SECONDS: ${{ inputs.timeout-seconds }}
+        SMOKE_TEST_TIMEOUT_SECONDS: ${{ inputs.test-timeout-seconds }}
+      run: python3 "$GITHUB_ACTION_PATH/smoke.py"
