@@ -16,15 +16,15 @@ def load(name, path):
     return module
 
 
-merge = load('checked_merge', 'merge/merge.py')
+support = load('recovery_support', 'ci-recovery/support.py')
 repair = load('biome_repair', 'biome-repair/repair.py')
-require, Blocked, sha, timestamp = merge.require, merge.Blocked, merge.sha, merge.timestamp
+require, Blocked, sha, timestamp = support.require, support.Blocked, support.sha, support.timestamp
 WINDOW = timedelta(days=7)
 GRACE = timedelta(minutes=5)
 WORKFLOW = 'repair-recovery.yml'
 
 
-class API(merge.API):
+class API(support.API):
     def call(self, path):
         return self.request(path)
 
@@ -56,7 +56,7 @@ def classification(runs, jobs, published, now):
         return 'recover: missing post-repair dispatch'
     current = newest(runs)
     if current['conclusion'] == 'success':
-        return 'awaiting Renovate request or checked merge: newest CI succeeded'
+        return 'awaiting Renovate: newest CI succeeded'
     if current['conclusion'] == 'action_required' and current['event'] == 'pull_request' and not jobs:
         dispatched = [r for r in runs if r['event'] == 'workflow_dispatch']
         if len(runs) == 1:
@@ -81,7 +81,7 @@ def candidate(api, repository, branch, base, config, number, now):
     require(repair.eligible(pr, repository, head), 'not a current same-repository Renovate PR')
     require(pr['base']['ref'] == branch and pr['base']['sha'] == base, 'recovery base changed')
     require(not {'manual-dependencies', 'do-not-merge'} & {label['name'] for label in pr.get('labels', [])}, 'manual dependency policy applies')
-    merge.approvals(pr, api.pages(f'/pulls/{number}/reviews'), 0)
+    support.require_no_objections(pr, api.pages(f'/pulls/{number}/reviews'))
     commit = api.request('/commits/' + head)
     author = commit.get('author') or {}
     require(author.get('id') == 41898282 and author.get('login') == 'github-actions[bot]' and author.get('type') == 'Bot', 'head is not a GitHub Actions repair')
@@ -183,7 +183,7 @@ def reconcile(api, repository, branch, base, config, number, now, inputs, run_id
 def main():
     event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
     repository = os.environ['GITHUB_REPOSITORY']
-    require(repository.startswith('edbfi/') and event['repository']['full_name'] == repository, 'recovery repository mismatch')
+    require(event['repository']['full_name'] == repository, 'recovery repository mismatch')
     api = API(repository, os.environ['GH_TOKEN'])
     live = api.request('')
     branch = live['default_branch']
@@ -191,7 +191,7 @@ def main():
     base = api.request('/git/ref/heads/' + urllib.parse.quote(branch, safe=''))['object']['sha']
     require(os.environ['GITHUB_SHA'] == base, 'recovery must execute the current trusted default branch')
     require(os.environ['GITHUB_EVENT_NAME'] in {'schedule', 'workflow_dispatch', 'workflow_run'}, 'unsupported recovery event')
-    config = merge.policy(api, base)
+    config = support.policy(api, base)
     options = config.get('repair_recovery', {})
     if options.get('enabled') is not True:
         print('Repair CI recovery is disabled by the trusted policy.')
@@ -209,7 +209,7 @@ def main():
         numbers = [int(inputs['pr-number'])]
     else:
         require(not inputs.get('expected-head-sha') and not inputs.get('expected-base-sha'), 'incomplete recovery request')
-        numbers = [p['number'] for p in api.pages('/pulls?state=open') if merge.is_renovate(p['user'], config)]
+        numbers = [p['number'] for p in api.pages('/pulls?state=open') if support.is_renovate(p['user'])]
     for number in numbers:
         try:
             reconcile(api, repository, branch, base, config, number, datetime.now(timezone.utc), inputs, int(os.environ['GITHUB_RUN_ID']))

@@ -14,7 +14,7 @@ on:
         type: string
         default: ''
       expected-default-sha:
-        description: Exact default-branch commit requested after a checked merge
+        description: Exact current default-branch commit for guarded dispatch
         type: string
         default: ''
 permissions:

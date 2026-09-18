@@ -11,5 +11,8 @@
       "automerge": true,
       "dependencyDashboardApproval": false
     }
-  ]
+  ],
+  "automergeType": "pr",
+  "platformAutomerge": false,
+  "ignoreTests": false
 }

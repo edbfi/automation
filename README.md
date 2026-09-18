@@ -1,143 +1,100 @@
 # Automation
 
-Reusable validation workflows, dependency-update presets and checked PR merging.
-Licensed under AGPL-3.0-only; see [LICENSE](LICENSE).
+Reusable validation workflows, Renovate presets and app smoke support.
+Licensed under [AGPL-3.0-only](LICENSE).
 
-## CI workflows
+Renovate is the sole automatic PR merger. It merges dependency PRs itself, after
+required CI succeeds. Actions validate code, publish bounded Biome repairs and
+recover missing CI; they do not merge PRs. This repository does not automate the
+merging of development PRs.
 
-The `bun`, `python`, `go`, `rust`, `zig` and `content` workflows provide pinned
-runtime setup and run explicit repository-owned commands. Keep native builds,
-browser tests, contracts, migrations and other specialized checks in the caller.
-Use frozen dependencies and reject unintended tracked-file changes.
+**The current branch contains an unreleased breaking migration from v2.** Read
+[the migration guide](docs/renovate-migration.md) before adopting it. Existing
+immutable releases retain their behavior. This repository's dependency automerge
+is disabled until required-check protection and the migration canary are verified.
 
-Run full CI on pull requests, configured default-branch pushes and explicit
-dispatch. The final `ci / required` job must run with `if: always()` and depend
-directly on every mandatory job. Call
-`edbfi/automation/actions/gate@v1.0.0` with the complete `needs` JSON and the
-exact mandatory job IDs. Missing, failed, cancelled, pending, neutral and skipped
-mandatory results fail the aggregate. Reporting may skip only when optional.
+## Repository-owned CI
+
+The `bun`, `python`, `go`, `rust`, `zig` and `content` reusable workflows set up
+runtimes and run an explicit `command` in `working-directory`. Callers supply
+runtime `version`, and may override `runner` and `timeout-minutes`. Keep native
+builds, service dependencies, database setup and browser configuration in the
+repository that owns them. Every workflow rejects tracked-file mutations.
+
+The Bun workflow installs frozen dependencies. `install-directory` defaults to
+`working-directory`; set it separately when checking a workspace member:
+
+```yaml
+with:
+  version: 1.4.2
+  install-directory: .
+  working-directory: packages/web
+  command: bun run check
+```
+
+The install directory must contain `package.json` and exactly one `bun.lock` or
+`bun.lockb`. Only that lock contributes to the package-cache key. A nested
+independent application uses its own install directory. The workflow does not
+infer another package manager or regenerate missing locks. npm, pnpm and Yarn
+projects should own their frozen install steps and can use the runtime-neutral
+[smoke action](docs/smoke.md) and gate afterward. Python callers own their frozen
+`uv sync`/lock checks; setup-uv resolves and logs `latest` stable uv.
+
+Run full CI on every pull request, default-branch push and explicit dispatch.
+Use one final `ci / required` job with `if: always()` that directly needs **every**
+mandatory job, including smoke. Pass its full `toJSON(needs)` and the exact job
+IDs to `actions/gate`. Missing, undeclared, failed, cancelled, pending, neutral
+and skipped prerequisites all fail the gate. Do not filter the aggregate by
+paths or dependency type.
+
+Require that aggregate in GitHub branch protection/rulesets, bind it to the
+GitHub Actions app and require branches to be current. Do not give Renovate a
+bypass. GitHub itself accepts skipped/neutral checks; the always-running gate
+turns those prerequisite results into failure. See the complete wiring in
+[this repository's CI](.github/workflows/ci.yml).
 
 ## Dependency updates
 
-Start with the versioned base preset:
+Use immutable full-version references for presets, actions and workflows. The
+base `default.json` keeps automerge disabled. Add `mixed.json` to separate tested
+ecosystems, and add `automerge.json` **only after** the migration prerequisites
+are satisfied. Replace `RELEASE` with the published release you have validated:
 
 ```json
 {
-  "extends": ["github>edbfi/automation//default.json#v1.1.0"]
+  "extends": [
+    "github>edbfi/automation//default.json#RELEASE",
+    "github>edbfi/automation//automerge.json#RELEASE"
+  ]
 }
 ```
 
-After the checked merge workflow and its policy are validated, append
-`github>edbfi/automation//automerge.json#v1.1.0`. Mixed projects can append
-`github>edbfi/automation//mixed.json#v1.0.0`.
+The optional automerge preset makes all update types eligible, including majors
+and pre-1.0 updates. It uses `automergeType: pr`, `platformAutomerge: false` and
+`ignoreTests: false`. Never turn off test checking. Renovate rebases behind-base
+branches. Required CI remains enforced by GitHub even if another check finishes
+before CI starts. Explicit later repository package rules may disable automerge.
 
-The v1.1.0 base preset signs future Renovate commits with the actual bot author.
-The base alone keeps merging disabled. The optional v1.1.0 automerge preset makes
-all dependency update types eligible, including majors, pre-1.0 updates and
-shared automation presets/actions/workflows, without Dependency Dashboard
-approval. The dashboard remains useful for visibility. Consumers must remove
-obsolete local version caps, dashboard gates and automatic-merge exclusions when
-adopting this policy; later explicit repository rules still take precedence.
+The base retains bot-authored DCO trailers, release-age checks, separate
+TypeScript/Biome/prek/Actions groups, exact installed Biome versions and lockfile
+maintenance. Preserve deliberate boundaries where another updater owns a package.
+The [migration guide](docs/renovate-migration.md) explains retired comment commands,
+review/DCO policy, deployment triggers and safe rollout.
 
-The base groups non-major updates while keeping Actions, TypeScript, Biome and
-prek groups separate. Preserve deliberate ownership boundaries where a separate
-updater owns a dependency; do not run competing update pipelines. Docker/Hotio
-consumers are outside this rollout and keep their existing pinned policies.
+## App smoke and repair
 
-Renovate uses `platformAutomerge: false`, `automergeType: pr-comment` and the
-`/merge-when-green` handoff. Its authenticated request opts that bot PR into
-checked automatic merging after Renovate's eligibility evaluation. The checked merge
-helper independently verifies opt-in, request authenticity, reviews, current branch
-state and complete CI. Configure `minimum_approvals: 0` for unattended operation.
-Explicit review objections and `manual-dependencies`/`do-not-merge` labels remain
-ways to stop a particular PR. Never enable `ignoreTests`.
+Use [shared smoke support](docs/smoke.md) to start an app, wait for readiness, run
+repository-owned assertions and clean up its process tree. HTTP readiness alone
+is not a rendering test. Existing Playwright `webServer` setups can stay local.
+The [fleet review](docs/review-2026-09-19.md) records current coverage and gaps.
 
-## Checked merging
+[Biome repair and recovery](docs/repair.md) remain separate from merging. Repair
+uses a scoped GitHub App for branch updates and has deliberately narrower lock
+support than ordinary CI. Unsupported lock formats/workspaces fail closed.
 
-Keep native GitHub automerge disabled. Branch protection and branch rulesets are
-not required by this helper. Authorized users and tools can still merge directly;
-the helper does not provide server-enforced protection.
+## Maintenance
 
-Store `.github/merge-policy.json` on the default branch. Its `required_checks`
-must list every mandatory **display name** returned by the Actions jobs API,
-including `ci / required`. Declare optional reporting in `optional_checks`.
-Unexpected contexts and duplicate names block merging. Use this repository's
-policy as a schema example, replacing the job names with the caller's actual CI.
-
-Call `edbfi/automation/actions/merge@v1.1.2` from trusted default-branch
-workflows for `issue_comment: created`, `pull_request_target: synchronize,
-reopened, edited, ready_for_review`, and completion of the `ci` workflow.
-Grant contents, pull requests, issues and Actions write, plus checks read.
-Serialize the helper with a repository-wide concurrency group and
-`cancel-in-progress: false`. Do not check out PR code in this privileged job.
-The workflow in this repository is a complete example; consumers use the
-versioned action instead of its local action path and need no checkout.
-
-For a development PR, an authorized maintainer can request a merge with:
-
-```text
-/merge <full-40-character-head-SHA> <full-40-character-default-branch-SHA>
-```
-
-Post the request after full CI finishes. Edited requests, requests predating PR
-changes or current CI, outstanding review requests, requested changes and missing
-current-head approvals block merging. The `updated_at` bump GitHub applies to the
-PR when the request itself is posted is tolerated (a few seconds of skew); any real
-change still fails the exact head and base SHA match. The head must contain the latest default
-branch. CI must be the newest full run for that exact head, from the configured
-workflow and GitHub Actions app, with matching run attempts and check-suite IDs.
-
-Every PR commit must have its own author-matching DCO trailer. Squash messages
-copy only those existing trailers; old unsigned bot commits are rejected instead
-of receiving fabricated sign-offs. The helper verifies the published tree and
-that the squash author has a genuine source sign-off before dispatching final CI.
-
-The helper reads policy from the current default-branch commit and repeats its
-evidence collection immediately before merging with the expected head SHA.
-GitHub's merge endpoint does not atomically lock the base SHA; an independent
-writer can still race the final check. A genuine, unedited Renovate comment is a
-standing request for that bot PR. Preserve it: Renovate caches posted comments
-and may not recreate a comment deleted by another actor. PR changes and successful
-PR CI completion re-evaluate the request against the latest head/base, author DCO,
-repository opt-in, review decisions and complete CI. Current-head check runs
-(including Biome repair) and commit statuses (including release age) must also
-succeed; only verified suites from the trusted `merge.yml` helper are excluded
-to avoid its own earlier blocked run preventing recovery. Consumer merge workflows
-need `statuses: read` alongside `checks: read` for this verification. Missing or edited comments
-never authorize a merge. Maintainer requests retain the exact-SHA and freshness
-requirements above.
-
-After merging, the helper explicitly dispatches full default-branch CI because
-`GITHUB_TOKEN` merges suppress ordinary push-triggered workflows. CI must accept
-`expected-default-sha` and pass it to the dispatch guard in validation and the
-aggregate. A successful, current default-branch CI run can dispatch the optional
-`deploy_workflows` listed in policy. Those workflows must accept and validate the
-same exact-commit input before publishing. Failed dispatches are retried and fail
-visibly, with the merged SHA and required CI target recorded for recovery.
-
-## Biome repair
-
-`biome-repair.yml@v1.0.0` separates computation from publication. Computation
-uses the exact same-repository Renovate Biome head, disables install scripts,
-installs the official formatter separately and checks migration/fix idempotency.
-Formatter processes receive no API token.
-
-Publication executes trusted action code, validates artifact identity and allowed
-paths, rejects races and pushes without force. It cannot modify workflows,
-manifests, lockfiles, hidden paths or add files. The new commit receives an
-explicit full-CI dispatch. Callers must accept `pr-number` and
-`expected-head-sha` and pass them to the dispatch guard in validation and the
-aggregate. Repair does not replace CI or update approvals.
-
-The v1.1.1 repair workflow treats schema-only Renovate updates as a no-op: it
-executes no package installation or formatter and publishes no repair commit.
-Normal CI still checks the PR. Actual dependency updates retain migration,
-allowlisted formatting, idempotence checks and full CI after repair.
-
-## Maintenance and releases
-
-Use focused Conventional Commits with DCO sign-offs and a complete implementation
-PR. Validate locally with:
+Use focused Conventional Commits with genuine DCO sign-offs. Validate locally:
 
 ```sh
 bun install --frozen-lockfile --ignore-scripts
@@ -147,111 +104,11 @@ bun run validate:renovate
 actionlint
 ```
 
-The explicit native step prepares the locked RE2 dependency. Validation requires
-RE2; it does not silently accept a JavaScript-regex fallback. Tests exercise
-actual Renovate extraction and resolved policy, both pre-1.0 forms, manual
-overrides, strict aggregation, real Biome migration, dispatch identity and merge
-request/CI races.
+RE2 must load natively; tests do not accept a JavaScript regex fallback. The test
+suite covers resolved Renovate policy, frozen Bun text/binary installs and
+workspaces, strict aggregation, real Biome migration, publication races, bounded
+recovery and smoke process lifecycle failures.
 
-Shared-policy updates are eligible for automated consumer adoption only after
-the shared implementation has passed its own tests and a release is published.
-Each consumer still runs its full required CI on the updated version.
-
-Publish immutable full-version releases only after the implementation PR and
-merged revision pass CI. Never move release tags. Callers reference versioned
-workflows, actions and presets.
-
-## Version-aware repair and CI recovery (v1.2.0)
-
-Installed Biome dependencies are pinned exactly by the base preset. The schema
-manager and dedicated Biome group remain enabled. Repair accepts the dedicated
-Biome route and `renovate/lock-file-maintenance` only when the selected package's
-locked stable Biome version changes against the current base. Standalone text Bun
-lockfiles are supported; ambiguous workspaces and unsupported resolutions fail
-closed. Both computation and publication verify this evidence. SVGs, manifests,
-lockfiles, workflows and other protected paths remain outside the repair output.
-
-The Python workflow resolves `setup-uv`'s `latest` stable version and logs it.
-Callers must retain frozen installs, lock validation and mutation checks; repeat
-runs may use different uv executables. Integration jobs must use the same policy.
-
-Copy `.github/workflows/repair-recovery.yml` into a consumer, replacing its local
-checkout/action steps with `edbfi/automation/actions/ci-recovery@v1.2.0` (keep Python
-setup and latest uv logging). Its run name, dispatch inputs and repository-wide
-concurrency group are part of the recovery protocol. Enable this explicit block
-in the trusted `.github/merge-policy.json`, using exactly the existing repair
-caller's paths and package directory:
-
-```json
-"repair_recovery": {
-  "enabled": true,
-  "automation_ref": "v1.2.0",
-  "package_directory": ".",
-  "config_files": ["biome.json"],
-  "source_roots": ["src", "tests"]
-}
-```
-
-Recovery runs only from the current default branch. It verifies the publication's
-shared workflow, exact run/attempt, publish log, parent/head, allowed diff and
-current base before dispatching full CI through the existing guarded inputs.
-Commit author text alone is not proof. Publication logs must remain available
-for the seven-day recovery window; expired or unavailable evidence blocks safely.
-The original one-day compute artifact is not needed for legacy recovery.
-
-An hourly reconciliation and repair/CI completion events discover missing CI and
-the specific newer `action_required` PR run with zero jobs. Active CI waits;
-deterministic failures block. A dispatch reservation is recorded as a separate
-Actions run **before** the CI POST. At most two reservations per repaired head
-can dispatch, including failed or uncertain requests; rerunning a reservation
-cannot dispatch again. Preserve Actions history for at least 30 days. Five-minute
-grace periods allow accepted runs to become visible. An uncertain dispatch POST
-is never blindly retried.
-
-A fresh run must satisfy the unchanged newest-run validator. Recovery never
-approves workflows, manufactures Renovate requests, or adds credentials. If GitHub
-still requires approval, the run URL identifies the maintainer's
-“Approve workflows to run” action. The merge helper reports when it is awaiting
-Renovate's genuine request. Disable recovery by setting `repair_recovery.enabled`
-to false; full CI and checked merging continue unchanged.
-
-## App-authenticated repair publication (v2.0.0)
-
-Version 2 requires a GitHub App for repair branch updates. GitHub puts PR workflows
-triggered by `GITHUB_TOKEN` updates into an approval-required state; a successful
-dispatched run does not clear that platform approval. App-authenticated updates
-can start ordinary PR CI automatically.
-
-Install a private App only on the intended consumer repositories, with Contents
-read/write and the mandatory Metadata read permission. No Actions, Checks,
-Workflows, Administration or Pull requests permissions are needed by the App.
-Store its Client ID in the repository variable `RENOVATE_REPAIR_APP_CLIENT_ID`
-and its private key in the Actions secret `RENOVATE_REPAIR_APP_PRIVATE_KEY`.
-In each consumer's reusable repair call, add:
-
-```yaml
-with:
-  repair-app-client-id: ${{ vars.RENOVATE_REPAIR_APP_CLIENT_ID }}
-  # Retain the existing explicit config/source allowlists and Bun version.
-secrets:
-  repair-app-private-key: ${{ secrets.RENOVATE_REPAIR_APP_PRIVATE_KEY }}
-```
-
-Only the trusted publication job receives the private key. It mints a short-lived
-token restricted to the current repository and Contents write, and revokes it at
-job completion. Only the non-force branch update uses that token. Artifact
-validation, Git object creation and guarded full-CI dispatch use the existing
-workflow token. No PR code is checked out or executed in publication. Commit
-authorship and its DCO remain `github-actions[bot]`, so keep the existing narrow
-`gitIgnoredAuthors` entry; do not ignore human changes.
-
-The publisher tolerates a lagging PR-head read for at most four seconds after its
-single branch update. Every retry checks that the live ref is still exactly the
-published commit. Unexpected heads fail immediately, and all repository, base,
-version and path checks still apply. Publication and CI POSTs are never blindly
-retried. Normal PR CI and the guarded dispatch both run complete validation;
-the newest-run merge rule remains unchanged.
-
-Upgrade preset, workflow and action references together. This is a major release
-because the repair workflow requires the App inputs and direct publish-action
-callers must provide `publish-token`; there is no silent `GITHUB_TOKEN` fallback.
+Publish an immutable release only after the implementation PR and merged revision
+pass CI. This migration needs a major release and coordinated consumer adoption;
+do not move existing tags or publish it as a compatible v2 update.

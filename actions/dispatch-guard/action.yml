@@ -8,7 +8,7 @@ inputs:
     description: Exact commit the repair workflow requested.
     default: ''
   expected-default-sha:
-    description: Exact default-branch commit requested after a checked merge.
+    description: Exact current default-branch commit for guarded dispatch.
     default: ''
   token:
     description: Repository read token.
