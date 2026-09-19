@@ -11,8 +11,9 @@ merging of development PRs.
 **v3 is a breaking migration from v2.** Read
 [the migration guide](docs/renovate-migration.md) before adopting it. Existing
 immutable releases retain their behavior. This repository has strict required CI
-and PR policy protection. Only the Renovate 44.93.5 update is opted into a native
-merge canary; broad dependency automerge remains disabled pending hosted proof.
+and PR policy protection. A real [native merge canary](https://github.com/edbfi/automation/pull/39)
+proved Renovate-owned merging and successful default-branch CI. Dependency PRs are
+opted in with rebase merging; shared Renovate policy updates remain manual.
 
 ## Repository-owned CI
 

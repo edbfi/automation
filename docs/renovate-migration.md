@@ -20,8 +20,8 @@ and [GitHub required checks](https://docs.github.com/en/repositories/configuring
 
 ## Adoption sequence
 
-Do this per repository before opting into the new automerge preset. Existing
-released v2 callers are not changed by this implementation PR.
+Do this per repository before opting into native automerge. Existing immutable
+v2 releases retain their original behavior.
 
 1. Disable dependency automerge in a migration PR, remove the old automerge preset
    and any later rule that re-enables it, and disable/delete the old `merge.yml`.
@@ -57,27 +57,25 @@ released v2 callers are not changed by this implementation PR.
    missing, pending, failed, cancelled and
    skipped mandatory jobs prevent a merge; a changed head/base requires fresh CI;
    only complete green CI permits Renovate to merge; default-branch CI then starts.
-   Keep broad automerge disabled until the canary succeeds. Finally add the new
-   automerge preset, remove the canary-only rule and remove the temporary
-   `automerge: false` override.
+   Keep broad automerge disabled until the canary succeeds. Then remove the
+   canary-only rule and set root `automerge: true` with `automergeStrategy: "rebase"`.
+   Preserve scoped opt-outs; the default preset keeps shared policy updates manual.
 
 Do not publish a new major and rely on existing v2 automatic adoption to perform
-these steps. v2 consumers currently auto-update the shared automation itself.
+these steps. Some v2 consumers automatically update the shared automation itself.
 Prepare their migration configuration first, or a missing retired action may
-leave their update PRs blocked. The reusable repair workflow stages its internal
-action references at `v3.0.0`
-so it will use the reviewed implementation when that release is published.
-Those remote references cannot be exercised before publication. No release or
-fleet settings change is part of this PR.
+leave their update PRs blocked. Verify every reusable workflow's internal action
+references against the same immutable release. The v3.0.1 release and its remote
+action references were verified before consumer rollout; never move a published tag.
 
 ## Repository settings and validation limits
 
-At the 2026-09-19 audit, this repository had neither branch protection nor an
-active branch ruleset. This PR therefore removes its old automerge opt-in and
-sets `automerge: false`, `automergeType: pr`, `platformAutomerge: false` and
-`ignoreTests: false` explicitly. The base preset remains pinned to the existing
-published release until the new release is available. No unverified direct
-merge path is enabled.
+At the start of the 2026-09-19 audit, this repository had no effective required-check
+protection. The rollout installed strict, source-pinned GitHub Actions requirements
+for `validate`, `tests / verify`, `ci / required` and `ci / policy`, enforced for
+administrators too. The legacy merger is retired. Native PR merging is enabled
+only after the hosted proof below, with `platformAutomerge: false` and
+`ignoreTests: false`. The default preset still requires explicit consumer opt-in.
 
 Local tests verify preset resolution, the required aggregate, absence of the
 custom merger, and recovery's inability to call mutation endpoints other than CI
@@ -94,7 +92,9 @@ administrators still control manual GitHub permissions and bypass policies.
 The protected canary [automation #39](https://github.com/edbfi/automation/pull/39)
 was merged by `renovate[bot]` using rebase after all required checks passed on
 `1f458f3e55e2a5eafc842bf83252cbeac6f89243`. The resulting commit is
-`6254e76edc52727c20849bb68876e7f0665a6dcd`. This is distinct from the
+`6254e76edc52727c20849bb68876e7f0665a6dcd`; its
+[default-branch CI](https://github.com/edbfi/automation/actions/runs/35414782306) passed.
+This is distinct from the
 agent-operated implementation and migration merges.
 
 [PR #46](https://github.com/edbfi/automation/pull/46) fixed a discovered interaction:
