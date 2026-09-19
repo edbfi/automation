@@ -64,6 +64,19 @@ for (const path of ['biome.json', 'frontend/biome.json', 'packages/ui/biome.json
 async function policy(config, overrides = {}) {
   return applyPackageRules({ ...config, manager: 'bun', datasource: 'npm', depName: 'example', packageName: 'example', currentVersion: '1.0.0', currentValue: '1.0.0', updateType: 'patch', versioning: 'semver', ...overrides });
 }
+const canaryConfig = mergeChildConfig(base, repository);
+const canary = await policy(canaryConfig, { depName: 'renovate', packageName: 'renovate', newValue: '44.93.5', updateType: 'minor' });
+assert.equal(canary.automerge, true);
+assert.equal(canary.automergeStrategy, 'rebase');
+assert.equal(canary.minimumReleaseAge, '3 days');
+for (const overrides of [
+  {},
+  { depName: 'renovate', packageName: 'renovate', newValue: '44.93.6' },
+  { depName: 'renovate', packageName: 'renovate', newValue: '45.0.0', updateType: 'major' },
+  { manager: 'github-actions', datasource: 'github-runners', depName: 'ubuntu', packageName: 'ubuntu', newValue: '26.04', updateType: 'major' },
+]) {
+  assert.equal((await policy(canaryConfig, overrides)).automerge, false);
+}
 assert.equal((await policy(base)).automerge, false);
 assert.equal((await policy(ready)).automerge, true);
 assert.equal((await policy(ready, { updateType: 'major' })).automerge, true);

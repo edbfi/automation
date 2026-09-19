@@ -1,10 +1,29 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "github>edbfi/automation//default.json#v2.0.0"
+    "github>edbfi/automation//default.json#v3.0.1"
   ],
   "automerge": false,
   "automergeType": "pr",
   "platformAutomerge": false,
-  "ignoreTests": false
+  "ignoreTests": false,
+  "packageRules": [
+    {
+      "description": "Single protected Renovate canary; broad automerge remains disabled.",
+      "matchManagers": [
+        "bun",
+        "npm"
+      ],
+      "matchPackageNames": [
+        "renovate"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "matchNewValue": "44.93.5",
+      "automerge": true,
+      "automergeStrategy": "rebase"
+    }
+  ]
 }
