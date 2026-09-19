@@ -9,19 +9,19 @@ import { extractPackageFile as extractPreset } from '../node_modules/renovate/di
 import { extractPackageFile as extractActions } from '../node_modules/renovate/dist/modules/manager/github-actions/extract.js';
 import { GlobalConfig } from '../node_modules/renovate/dist/config/global.js';
 
-import { ensureComment } from '../node_modules/renovate/dist/modules/platform/comment.js';
-import { getCache, resetCache } from '../node_modules/renovate/dist/util/cache/repository/index.js';
-import { hash } from '../node_modules/renovate/dist/util/hash.js';
-
-// A cached bot handoff does not check GitHub again, even if another actor deleted it.
-// No platform is initialized: an unexpected remote lookup fails this regression.
-getCache().prComments = { 120: { '': hash('/merge-when-green') } };
-assert.equal(await ensureComment({ number: 120, topic: null, content: '/merge-when-green' }), true);
-resetCache();
-
 GlobalConfig.set({ localDir: process.cwd() });
 
 const read = async (name) => JSON.parse(await readFile(new URL(`../${name}.json`, import.meta.url), 'utf8'));
+// Direct merging is opt-in only after server-side required checks are verified.
+const repository = await read('renovate');
+assert.equal(repository.automerge, false);
+assert.equal(repository.automergeType, 'pr');
+assert.equal(repository.platformAutomerge, false);
+assert.equal(repository.ignoreTests, false);
+assert.ok(!repository.extends.some((preset) => preset.includes('/automerge.json')));
+await assert.rejects(readFile('.github/workflows/merge.yml'));
+await assert.rejects(readFile('actions/merge/action.yml'));
+
 const { config: base } = await resolveConfigPresets(await read('default'));
 assert.deepEqual(base.commitTrailers, ['Signed-off-by: {{{gitAuthor}}}']);
 const ready = mergeChildConfig(base, await read('automerge'));
@@ -76,8 +76,8 @@ assert.equal((await policy(ready, { packageName: '@biomejs/biome', depName: '@bi
 console.log('Renovate extraction and resolved-policy scenarios passed.');
 
 assert.equal(base.platformAutomerge, false);
-assert.equal(base.automergeType, 'pr-comment');
-assert.equal(base.automergeComment, '/merge-when-green');
+assert.equal(base.automergeType, 'pr');
+assert.equal(base.automergeComment, undefined);
 assert.equal((await policy(ready, { currentVersion: 'v0.4.0', updateType: 'minor' })).dependencyDashboardApproval, false);
 assert.equal((await policy(mergeChildConfig(ready, { packageRules: [{ matchPackageNames: ['example'], automerge: false }] }))).automerge, false);
 assert.equal((await policy(ready, { updateType: 'major', depName: 'some-runtime', packageName: 'some-runtime' })).automerge, true);
@@ -88,6 +88,7 @@ for (const updateType of ['major', 'minor', 'patch', 'pin', 'digest', 'lockFileM
     const result = await policy(ready, { updateType, manager, depName: 'edbfi/automation', packageName: 'edbfi/automation' });
     assert.equal(result.automerge, true);
     assert.equal(result.dependencyDashboardApproval, false);
+    assert.equal(result.automergeType, 'pr');
     assert.equal(result.platformAutomerge, false);
     assert.equal(result.ignoreTests, false);
   }

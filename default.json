@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Versioned dependency updates with explicit CI-checked merge requests.",
+  "description": "Versioned dependency updates; Renovate alone merges opted-in PRs after required CI.",
   "extends": [
     "config:recommended",
     ":gitSignOff",
@@ -9,7 +9,7 @@
     "customManagers:biomeVersions"
   ],
   "automerge": false,
-  "automergeType": "pr-comment",
+  "automergeType": "pr",
   "platformAutomerge": false,
   "ignoreTests": false,
   "rebaseWhen": "behind-base-branch",
@@ -60,7 +60,6 @@
       "matchManagers": [
         "github-actions"
       ],
-      "pinDigests": false,
       "groupName": "github-actions non-major",
       "matchUpdateTypes": [
         "minor",
@@ -107,6 +106,5 @@
       "groupName": "shared automation policy",
       "automerge": false
     }
-  ],
-  "automergeComment": "/merge-when-green"
+  ]
 }

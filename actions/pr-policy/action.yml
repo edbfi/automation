@@ -1,0 +1,17 @@
+name: Pull request policy
+description: Read current PR title, author-matching DCO, holds and reviews without modifying GitHub state.
+inputs:
+  token:
+    description: Read-only token for PR metadata, reviews and commit evidence.
+    required: true
+  minimum-approvals:
+    description: Number of non-author approvals required on the exact current head.
+    default: '0'
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        MINIMUM_APPROVALS: ${{ inputs.minimum-approvals }}
+      run: python3 "$GITHUB_ACTION_PATH/policy.py"

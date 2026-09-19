@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -201,6 +202,7 @@ class RepairTests(unittest.TestCase):
             def run(*args):
                 return subprocess.check_output(args, cwd=root, stderr=subprocess.STDOUT).decode().strip()
             run('bun', 'install', '--ignore-scripts')
+            shutil.rmtree(root / 'node_modules')
             run('git', 'init', '-q')
             run('git', 'add', 'package.json', 'bun.lock', 'biome.json', 'frontend', 'src')
             run('git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'test: initialize fixture')
@@ -213,11 +215,26 @@ class RepairTests(unittest.TestCase):
                     return super().call(path, data, method)
             api = API()
             api.pr['head']['sha'] = head
+            tool_calls = []
+            run_process = subprocess.run
+            credentials = {'GH_TOKEN': 'workflow-test', 'PUBLISH_TOKEN': 'publisher-test',
+                           'GITHUB_TOKEN': 'github-test', 'NODE_AUTH_TOKEN': 'registry-test'}
+            def run_without_credentials(command, *args, **kwargs):
+                if command[0] == 'bun' or Path(command[0]).name == 'biome':
+                    tool_calls.append(command)
+                    self.assertFalse(set(credentials) & kwargs['env'].keys())
+                    if command[0] == 'bun':
+                        self.assertNotEqual(Path(kwargs['cwd']).resolve(), root.resolve())
+                return run_process(command, *args, **kwargs)
             previous = Path.cwd()
             try:
                 os.chdir(root)
-                with patch.dict(os.environ, {'GITHUB_REPOSITORY': REPO, 'GITHUB_OUTPUT': str(root / 'outputs')}):
+                with patch.dict(os.environ, {**credentials, 'GITHUB_REPOSITORY': REPO, 'GITHUB_OUTPUT': str(root / 'outputs')}), \
+                        patch.object(repair.subprocess, 'run', side_effect=run_without_credentials):
                     repair.compute(['biome.json', 'frontend/biome.json'], ['src', 'frontend/src'], '.', api, 7, head, root / 'repair.json')
+                self.assertFalse((root / 'node_modules').exists())
+                self.assertTrue(any(command[0] == 'bun' for command in tool_calls))
+                self.assertTrue(any(Path(command[0]).name == 'biome' for command in tool_calls))
                 payload = json.loads((root / 'repair.json').read_text())
                 self.assertEqual({f['path'] for f in payload['files']}, {'biome.json', 'frontend/biome.json', 'src/example.ts', 'frontend/src/example.ts'})
                 for file in ['biome.json', 'frontend/biome.json']:
@@ -234,6 +251,24 @@ class RepairTests(unittest.TestCase):
                 self.assertFalse((root / 'repair.json').exists())
             finally:
                 os.chdir(previous)
+
+    def test_wrong_isolated_tool_identity_stops_before_formatter_execution(self):
+        for metadata in [{'name': 'unofficial-biome', 'version': '2.5.13'},
+                         {'name': '@biomejs/biome', 'version': '2.5.12'}]:
+            with self.subTest(metadata=metadata), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                def install(command, **kwargs):
+                    package = Path(kwargs['cwd']) / 'node_modules/@biomejs/biome/package.json'
+                    package.parent.mkdir(parents=True)
+                    package.write_text(json.dumps(metadata))
+                with patch.dict(os.environ, {'GITHUB_REPOSITORY': REPO, 'GITHUB_OUTPUT': str(root / 'outputs')}), \
+                        patch.object(repair.subprocess, 'run', side_effect=install) as run, \
+                        patch.object(repair.subprocess, 'check_output') as git, \
+                        self.assertRaisesRegex(ValueError, 'official stable Biome'):
+                    repair.compute(['biome.json'], ['src'], '.', FakeGitHub(), 7, HEAD, root / 'repair.json')
+                self.assertEqual(run.call_count, 1)
+                git.assert_not_called()
+                self.assertFalse((root / 'repair.json').exists())
 
     def test_only_current_same_repository_renovate_pr_is_eligible(self):
         self.assertTrue(repair.eligible(PR, REPO, HEAD))
