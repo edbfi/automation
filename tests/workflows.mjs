@@ -91,12 +91,13 @@ console.log('Workflow contracts and real Bun root, nested, workspace, text/binar
 const policyWrapper = await workflow('policy');
 assert.deepEqual(policyWrapper.permissions, { contents: 'read', 'pull-requests': 'read' });
 assert.ok(!policyWrapper.on.pull_request_target);
-for (const type of ['synchronize', 'edited', 'labeled', 'unlabeled', 'review_requested', 'review_request_removed', 'converted_to_draft']) {
+for (const type of ['opened', 'reopened', 'synchronize', 'edited', 'labeled', 'unlabeled', 'ready_for_review', 'review_requested', 'review_request_removed', 'converted_to_draft']) {
   assert.ok(policyWrapper.on.pull_request.types.includes(type));
 }
 assert.deepEqual(policyWrapper.on.pull_request_review.types, ['submitted', 'edited', 'dismissed']);
-assert.equal(policyWrapper.concurrency.group, 'pr-policy-${{ github.event.pull_request.number }}');
-assert.equal(policyWrapper.concurrency['cancel-in-progress'], true);
+// Cancelled sibling runs keep native Renovate pending even after a replacement passes.
+assert.equal(policyWrapper.concurrency, undefined);
+assert.equal(policyWrapper.jobs.policy.concurrency, undefined);
 assert.equal(policyWrapper.jobs.policy.name, 'ci / policy');
 const policyWorkflow = await workflow('pr-policy');
 assert.deepEqual(policyWorkflow.permissions, { contents: 'read', 'pull-requests': 'read' });

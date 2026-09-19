@@ -109,7 +109,7 @@ def evaluate(api, number, repository, expected_head, minimum_approvals=0):
     commits = api.pages(path + '/commits')
     validate(first, reviews, commits, repository, expected_head, minimum_approvals)
     # Re-read mutable policy immediately before concluding. A later metadata event
-    # cancels/replaces this job; GitHub does not atomically bind labels to merges.
+    # starts another evaluation; GitHub does not atomically bind labels to merges.
     current_reviews = api.pages(path + '/reviews')
     current = api.read(path)
     require(current_reviews == reviews, 'reviews changed during policy evaluation')

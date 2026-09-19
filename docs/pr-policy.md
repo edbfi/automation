@@ -33,9 +33,6 @@ on:
 permissions:
   contents: read
   pull-requests: read
-concurrency:
-  group: pr-policy-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
 jobs:
   policy:
     uses: edbfi/automation/.github/workflows/pr-policy.yml@RELEASE
@@ -49,7 +46,14 @@ review change refreshes policy without rerunning the application's full suite.
 
 The action verifies the exact event head, complete commit pagination, then
 re-reads the head/base, labels, title, review requests and reviews before success.
-Per-PR concurrency cancels older metadata evaluations across both event types.
+Allow each metadata evaluation to finish independently; do not add a concurrency
+group to this read-only wrapper. Renovate inspects all check runs on a head, so
+a cancelled sibling can keep a PR pending even after its replacement succeeds.
+Disabling only `cancel-in-progress` still permits queued runs to be cancelled.
+
+After resolving a hold or policy failure, use a supported Renovate rebase or check
+rerun if an earlier failed/cancelled result still blocks that same head. Require
+complete current-head CI again; never ignore tests to clear historical results.
 Keep the wrapper and pinned references under normal code review.
 
 Use `pull_request`, not `pull_request_target`: the latter's default-branch check
