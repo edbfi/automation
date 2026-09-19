@@ -47,6 +47,9 @@ IDs to `actions/gate`. Missing, undeclared, failed, cancelled, pending, neutral
 and skipped prerequisites all fail the gate. Do not filter the aggregate by
 paths or dependency type.
 
+Also install and require the [PR policy check](docs/pr-policy.md) for DCO, titles,
+review objections and merge holds; preserve native review protection.
+
 Require that aggregate in GitHub branch protection/rulesets, bind it to the
 GitHub Actions app and require branches to be current. Do not give Renovate a
 bypass. GitHub itself accepts skipped/neutral checks; the always-running gate

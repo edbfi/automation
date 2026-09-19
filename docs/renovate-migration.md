@@ -35,14 +35,14 @@ released v2 callers are not changed by this implementation PR.
    require branches to be current, and enforce the rule for administrators too.
    Neither Renovate nor another integration may bypass required checks. Requiring
    individual checks as well is fine; keep job names unique across workflows.
-4. Move any additional guarantees you need into required CI or GitHub rules:
-   DCO validation, review approvals/objections, conversation resolution and any
-   `manual-dependencies` / `do-not-merge` label blocking. Those labels still stop
-   repair recovery, but do not stop direct Renovate merges unless you implement
-   an equivalent required check or disable automerge through Renovate policy. The
-   retired helper's exact context inventory, author-matching DCO/squash synthesis,
-   comment freshness and newest-run policy are **not** provided by these presets.
-   A `Signed-off-by` trailer is not a cryptographic commit signature.
+4. Install the [required PR policy check](pr-policy.md) alongside the aggregate.
+   It preserves author-matching DCO, Conventional Commit titles, outstanding review
+   requests and objections, and hold labels. Preserve native GitHub review and
+   conversation-resolution rules. Verify metadata events update the current PR
+   check; labels cannot be atomically bound to a merge. The retired helper's
+   squash-message synthesis, comment freshness and newest-run inventory are not
+   provided by these presets. A `Signed-off-by` trailer is not a cryptographic
+   commit signature. Preserve trailers through the selected GitHub merge method.
 5. Verify ordinary default-branch `push` CI and deployment triggers. Renovate's
    integration performs the merge, so the old `GITHUB_TOKEN` merge suppression
    workaround is no longer needed. Replace `deploy_workflows` with repository-owned

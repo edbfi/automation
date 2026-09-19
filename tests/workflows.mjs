@@ -86,3 +86,20 @@ try {
   await rm(fixtures, { recursive: true, force: true });
 }
 console.log('Workflow contracts and real Bun root, nested, workspace, text/binary frozen installs passed.');
+
+// Metadata policy must refresh on holds and reviews without checking out consumer code.
+const policyWrapper = await workflow('policy');
+assert.deepEqual(policyWrapper.permissions, { contents: 'read', 'pull-requests': 'read' });
+assert.ok(!policyWrapper.on.pull_request_target);
+for (const type of ['synchronize', 'edited', 'labeled', 'unlabeled', 'review_requested', 'review_request_removed', 'converted_to_draft']) {
+  assert.ok(policyWrapper.on.pull_request.types.includes(type));
+}
+assert.deepEqual(policyWrapper.on.pull_request_review.types, ['submitted', 'edited', 'dismissed']);
+assert.equal(policyWrapper.concurrency.group, 'pr-policy-${{ github.event.pull_request.number }}');
+assert.equal(policyWrapper.concurrency['cancel-in-progress'], true);
+assert.equal(policyWrapper.jobs.policy.name, 'ci / policy');
+const policyWorkflow = await workflow('pr-policy');
+assert.deepEqual(policyWorkflow.permissions, { contents: 'read', 'pull-requests': 'read' });
+assert.equal(policyWorkflow.jobs.policy.name, 'ci / policy');
+assert.ok(!policyWorkflow.jobs.policy.steps.some((step) => step.uses?.startsWith('actions/checkout@')));
+assert.deepEqual(policyWorkflow.jobs.policy.steps.map((step) => step.uses), ['edbfi/automation/actions/pr-policy@v3.0.0']);

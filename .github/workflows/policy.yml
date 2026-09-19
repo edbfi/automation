@@ -1,0 +1,25 @@
+name: PR policy
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, edited, labeled, unlabeled, ready_for_review, converted_to_draft, review_requested, review_request_removed]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+permissions:
+  contents: read
+  pull-requests: read
+concurrency:
+  group: pr-policy-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  policy:
+    name: ci / policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # Bootstrap this repository's reviewed implementation without an unreleased remote ref.
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./actions/pr-policy
+        with:
+          token: ${{ github.token }}
