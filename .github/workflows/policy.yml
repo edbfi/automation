@@ -10,7 +10,7 @@ permissions:
 jobs:
   policy:
     name: ci / policy
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       # Bootstrap this repository's reviewed implementation without an unreleased remote ref.
