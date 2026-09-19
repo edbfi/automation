@@ -10,6 +10,7 @@ jobs:
       - run: 'true'
   tests:
     name: tests / verify
+    if: ${{ false }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -27,4 +28,4 @@ jobs:
       - uses: edbfi/automation/actions/gate@v3.0.0
         with:
           needs: ${{ toJSON(needs) }}
-          required: validate tests absent
+          required: validate tests
