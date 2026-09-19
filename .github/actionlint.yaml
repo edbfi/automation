@@ -1,0 +1,7 @@
+# actionlint 1.7.12 predates this GitHub-hosted runner label.
+# Verified against https://github.com/actions/runner-images#available-images.
+# The label extension is named self-hosted-runner; jobs still use GitHub hosting.
+# Remove this entry when actionlint includes Ubuntu 26.04 in its built-in catalog.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
