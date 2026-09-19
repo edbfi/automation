@@ -88,3 +88,21 @@ is a release/adoption prerequisite, not a claim made by local tests.
 Renovate manages its own dependency PRs. It does not provide a facility to merge
 arbitrary development PRs; this repository no longer supplies one. Repository
 administrators still control manual GitHub permissions and bypass policies.
+
+## Hosted native merge evidence
+
+The protected canary [automation #39](https://github.com/edbfi/automation/pull/39)
+was merged by `renovate[bot]` using rebase after all required checks passed on
+`1f458f3e55e2a5eafc842bf83252cbeac6f89243`. The resulting commit is
+`6254e76edc52727c20849bb68876e7f0665a6dcd`. This is distinct from the
+agent-operated implementation and migration merges.
+
+[PR #46](https://github.com/edbfi/automation/pull/46) fixed a discovered interaction:
+a cancelled policy run on the same head kept Renovate pending even when its
+replacement passed. Let each read-only metadata evaluation finish independently.
+
+After verifying protection and the applicable hosted canaries, consumers can set
+root `automerge: true` and `automergeStrategy: "rebase"` with the default preset.
+This preserves its manual `renovate-config` rule and any repository-specific
+opt-outs; the explicit wildcard automerge preset also opts shared policy updates
+in. Preserve release-age rules and holds, and verify default CI after each merge.

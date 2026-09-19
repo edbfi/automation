@@ -3,27 +3,9 @@
   "extends": [
     "github>edbfi/automation//default.json#v3.0.1"
   ],
-  "automerge": false,
+  "automerge": true,
   "automergeType": "pr",
   "platformAutomerge": false,
   "ignoreTests": false,
-  "packageRules": [
-    {
-      "description": "Single protected Renovate canary; broad automerge remains disabled.",
-      "matchManagers": [
-        "bun",
-        "npm"
-      ],
-      "matchPackageNames": [
-        "renovate"
-      ],
-      "matchUpdateTypes": [
-        "minor",
-        "patch"
-      ],
-      "matchNewValue": "44.93.5",
-      "automerge": true,
-      "automergeStrategy": "rebase"
-    }
-  ]
+  "automergeStrategy": "rebase"
 }

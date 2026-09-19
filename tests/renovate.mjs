@@ -14,7 +14,7 @@ GlobalConfig.set({ localDir: process.cwd() });
 const read = async (name) => JSON.parse(await readFile(new URL(`../${name}.json`, import.meta.url), 'utf8'));
 // Direct merging is opt-in only after server-side required checks are verified.
 const repository = await read('renovate');
-assert.equal(repository.automerge, false);
+assert.equal(repository.automerge, true);
 assert.equal(repository.automergeType, 'pr');
 assert.equal(repository.platformAutomerge, false);
 assert.equal(repository.ignoreTests, false);
@@ -64,19 +64,17 @@ for (const path of ['biome.json', 'frontend/biome.json', 'packages/ui/biome.json
 async function policy(config, overrides = {}) {
   return applyPackageRules({ ...config, manager: 'bun', datasource: 'npm', depName: 'example', packageName: 'example', currentVersion: '1.0.0', currentValue: '1.0.0', updateType: 'patch', versioning: 'semver', ...overrides });
 }
-const canaryConfig = mergeChildConfig(base, repository);
-const canary = await policy(canaryConfig, { depName: 'renovate', packageName: 'renovate', newValue: '44.93.5', updateType: 'minor' });
-assert.equal(canary.automerge, true);
-assert.equal(canary.automergeStrategy, 'rebase');
-assert.equal(canary.minimumReleaseAge, '3 days');
-for (const overrides of [
-  {},
-  { depName: 'renovate', packageName: 'renovate', newValue: '44.93.6' },
-  { depName: 'renovate', packageName: 'renovate', newValue: '45.0.0', updateType: 'major' },
-  { manager: 'github-actions', datasource: 'github-runners', depName: 'ubuntu', packageName: 'ubuntu', newValue: '26.04', updateType: 'major' },
-]) {
-  assert.equal((await policy(canaryConfig, overrides)).automerge, false);
+// Hosted canary #39 proved the native actor after required CI and strict protection.
+const repositoryConfig = mergeChildConfig(base, repository);
+for (const updateType of ['major', 'minor', 'patch', 'pin', 'digest', 'lockFileMaintenance']) {
+  const result = await policy(repositoryConfig, { updateType });
+  assert.equal(result.automerge, true);
+  assert.equal(result.automergeStrategy, 'rebase');
+  assert.equal(result.minimumReleaseAge, '3 days');
+  assert.equal(result.ignoreTests, false);
 }
+assert.equal((await policy(repositoryConfig, { manager: 'renovate-config', depName: 'edbfi/automation', packageName: 'edbfi/automation' })).automerge, false);
+assert.equal((await policy(mergeChildConfig(repositoryConfig, { packageRules: [{ matchPackageNames: ['example'], automerge: false }] }))).automerge, false);
 assert.equal((await policy(base)).automerge, false);
 assert.equal((await policy(ready)).automerge, true);
 assert.equal((await policy(ready, { updateType: 'major' })).automerge, true);
