@@ -131,6 +131,31 @@ class PolicyTests(unittest.TestCase):
                 self.assertRaisesRegex(ValueError, 'reviews changed'):
             policy.evaluate(API(), 7, 'example/app', HEAD)
 
+    def test_unrelated_repository_metadata_does_not_invalidate_current_policy(self):
+        pr, commits = fixture()
+        current = deepcopy(pr)
+        for branch in ('head', 'base'):
+            current[branch]['repo'].update(pushed_at='2026-09-19T03:00:00Z', open_issues_count=42)
+        current['labels'] = [{'name': 'dependencies', 'color': 'abcdef'}]
+        pr['labels'] = [{'name': 'dependencies', 'color': '123456'}]
+        api = unittest.mock.Mock()
+        api.read.side_effect = [pr, current]
+        api.pages.side_effect = [[], commits, []]
+        policy.evaluate(api, 7, 'example/app', HEAD)
+
+    def test_branch_and_repository_identity_changes_invalidate_policy(self):
+        pr, commits = fixture()
+        for branch in ('head', 'base'):
+            for field, value in [('sha', 'c' * 40), ('ref', 'other-branch'),
+                                 ('repo', {'id': 99, 'full_name': 'example/other'})]:
+                current = deepcopy(pr)
+                current[branch][field] = value
+                api = unittest.mock.Mock()
+                api.read.side_effect = [pr, current]
+                api.pages.side_effect = [[], commits, []]
+                with self.subTest(branch=branch, field=field), self.assertRaisesRegex(ValueError, 'metadata changed'):
+                    policy.evaluate(api, 7, 'example/app', HEAD)
+
     def test_api_has_only_fixed_get_endpoints_and_paginates(self):
         requests = []
         def respond(request, timeout):

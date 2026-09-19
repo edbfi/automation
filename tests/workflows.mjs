@@ -102,4 +102,4 @@ const policyWorkflow = await workflow('pr-policy');
 assert.deepEqual(policyWorkflow.permissions, { contents: 'read', 'pull-requests': 'read' });
 assert.equal(policyWorkflow.jobs.policy.name, 'ci / policy');
 assert.ok(!policyWorkflow.jobs.policy.steps.some((step) => step.uses?.startsWith('actions/checkout@')));
-assert.deepEqual(policyWorkflow.jobs.policy.steps.map((step) => step.uses), ['edbfi/automation/actions/pr-policy@v3.0.0']);
+assert.deepEqual(policyWorkflow.jobs.policy.steps.map((step) => step.uses), ['edbfi/automation/actions/pr-policy@v3.0.1']);

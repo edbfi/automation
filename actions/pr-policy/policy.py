@@ -87,6 +87,21 @@ def validate(pr, reviews, commits, repository, expected_head, minimum_approvals=
     require(not renovate or genuine_renovate_commit, 'PR has no genuine Renovate-authored commit')
 
 
+def policy_snapshot(pr):
+    # Repository responses include volatile counters and pushed_at. Compare only
+    # the identities and mutable PR fields that can change merge eligibility.
+    branches = []
+    for name in ('head', 'base'):
+        branch = pr[name]
+        repository = branch.get('repo') or {}
+        branches.append((branch.get('sha'), branch.get('ref'), repository.get('id'), repository.get('full_name')))
+    return (pr['state'], pr['draft'], pr['title'], pr['commits'],
+            pr['user']['id'], pr['user'].get('login'), pr['user'].get('type'),
+            tuple(sorted(label['name'] for label in pr['labels'])),
+            tuple(sorted(user['id'] for user in pr['requested_reviewers'])),
+            tuple(sorted(team['id'] for team in pr['requested_teams'])), tuple(branches))
+
+
 def evaluate(api, number, repository, expected_head, minimum_approvals=0):
     path = f'/pulls/{number}'
     first = api.read(path)
@@ -98,8 +113,7 @@ def evaluate(api, number, repository, expected_head, minimum_approvals=0):
     current_reviews = api.pages(path + '/reviews')
     current = api.read(path)
     require(current_reviews == reviews, 'reviews changed during policy evaluation')
-    fields = ('state', 'draft', 'title', 'labels', 'requested_reviewers', 'requested_teams', 'head', 'base', 'commits')
-    require(all(current[field] == first[field] for field in fields), 'PR metadata changed during policy evaluation')
+    require(policy_snapshot(current) == policy_snapshot(first), 'PR metadata changed during policy evaluation')
     validate(current, current_reviews, commits, repository, expected_head, minimum_approvals)
 
 
