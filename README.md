@@ -86,6 +86,9 @@ maintenance. Preserve deliberate boundaries where another updater owns a package
 The [migration guide](docs/renovate-migration.md) explains retired comment commands,
 review/DCO policy, deployment triggers and safe rollout.
 
+See [release-age containment](docs/release-age.md) for the verified upstream
+artifact-resolution limitation, affected direct dependencies and exact-pin boundary.
+
 ## App smoke and repair
 
 Use [shared smoke support](docs/smoke.md) to start an app, wait for readiness, run
